@@ -42,6 +42,7 @@
 #define RAPI_HANDLER_CAPACITY 40
 #endif
 
+#define RAPI_RESPONSE_NOT_CONNECTED          -4
 #define RAPI_RESPONSE_QUEUE_FULL             -3
 #define RAPI_RESPONSE_BUFFER_OVERFLOW        -2
 #define RAPI_RESPONSE_TIMEOUT                -1
