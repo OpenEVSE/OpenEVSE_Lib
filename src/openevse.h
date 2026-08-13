@@ -79,10 +79,12 @@
 #define OPENEVSE_VFLAG_BOOT_LOCK            0x4000 // locked at boot
 #define OPENEVSE_VFLAG_MENNEKES_MANUAL      0x8000 // Mennekes lock manual mode
 
+// These referred to ECVF_* names, which belong to the controller firmware and
+// do not exist here; the macro only compiled because nothing expanded it.
 #if defined(AUTH_LOCK) && (AUTH_LOCK != 0)
-#define OPENEVSE_VFLAG_DEFAULT              ECVF_AUTH_LOCKED|ECVF_SESSION_ENDED
+#define OPENEVSE_VFLAG_DEFAULT              (OPENEVSE_VFLAG_AUTH_LOCKED|OPENEVSE_VFLAG_SESSION_ENDED)
 #else
-#define OPENEVSE_VFLAG_DEFAULT              ECVF_SESSION_ENDED
+#define OPENEVSE_VFLAG_DEFAULT              (OPENEVSE_VFLAG_SESSION_ENDED)
 #endif
 
 #define OPENEVSE_WIFI_MODE_AP 0
@@ -173,7 +175,11 @@ class OpenEVSEClass
 
     void setServiceLevel(uint8_t level, std::function<void(int ret)> callback);
 
-    void getCurrentCapacity(std::function<void(int ret, long min_current, long pilot, long max_configured_current, long max_hardware_current)> callback);
+    // Argument order follows the $GC response: min, hardware max, pilot,
+    // configured max. The names here previously listed a different order to
+    // the one the implementation passes, which is a trap for new callers --
+    // the arguments are positional, so only the names were ever wrong.
+    void getCurrentCapacity(std::function<void(int ret, long min_current, long max_hardware_current, long pilot, long max_configured_current)> callback);
     void setCurrentCapacity(long amps, bool save, std::function<void(int ret, long pilot)> callback);
     void setCurrentCapacity(long amps, const char *mode, std::function<void(int ret, long pilot)> callback);
     

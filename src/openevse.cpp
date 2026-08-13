@@ -581,6 +581,17 @@ void OpenEVSEClass::setServiceLevel(uint8_t level, std::function<void(int ret)> 
   //  $SL 2*15
   //  $SL A*24
 
+  // The protocol defines exactly three levels. Anything else would be sent
+  // verbatim, and a byte such as a space or CR would split the frame into a
+  // different command.
+  if(OPENEVSE_SERVICE_LEVEL_L1 != level &&
+     OPENEVSE_SERVICE_LEVEL_L2 != level &&
+     OPENEVSE_SERVICE_LEVEL_AUTO != level)
+  {
+    callback(RAPI_RESPONSE_INVALID_RESPONSE);
+    return;
+  }
+
   char command[8];
   snprintf(command, sizeof(command), "$SL %c", level);
 
@@ -890,8 +901,8 @@ void OpenEVSEClass::disable(std::function<void(int ret)> callback)
     return;
   }
 
-  // FR - restart EVSE
-  //  $FR*BC
+  // FD - disable EVSE
+  //  $FD*AE
 
   _sender->sendCmd("$FD", [this, callback](int ret) {
     callback(ret);
@@ -905,8 +916,8 @@ void OpenEVSEClass::restart(std::function<void(int ret)> callback)
     return;
   }
 
-  // FD - disable EVSE
-  //  $FD*AE
+  // FR - restart EVSE
+  //  $FR*BC
 
   _sender->sendCmd("$FR", [this, callback](int ret) {
     callback(ret);
@@ -951,6 +962,14 @@ void OpenEVSEClass::feature(uint8_t feature, bool enable, std::function<void(int
   //   V = Vent required check
   //  $FF D 0 - disable diode check
   //  $FF G 1 - enable ground check
+
+  // Deliberately not checked against the OPENEVSE_FEATURE_* list: controller
+  // firmware adds feature letters over time and the library should not be the
+  // thing blocking a new one. Reject only what would corrupt the frame.
+  if(feature <= ' ' || feature > '~') {
+    callback(RAPI_RESPONSE_INVALID_RESPONSE);
+    return;
+  }
 
   char command[64];
   snprintf(command, sizeof(command), "$FF %c %d", feature, enable ? 1 : 0);
@@ -1021,8 +1040,10 @@ void OpenEVSEClass::lcdDisplayText(int x, int y, const char *text, std::function
   snprintf(command, sizeof(command), "$FP %d %d %s", x, y, text);
 
   // replace spaces in the message with the magic char
+  // Note: text longer than the buffer is truncated by snprintf above.
   int expected_spaces = 3;
-  for(int i = 0; i < strlen(command); i++)
+  int command_len = strlen(command);
+  for(int i = 0; i < command_len; i++)
   {
     if(command[i] == ' ' && --expected_spaces < 0) {
       command[i] = OPENEVSE_LCD_SPACE_MAGIC_CHAR;

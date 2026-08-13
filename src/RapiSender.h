@@ -218,6 +218,10 @@ public:
   void enableSequenceId(uint8_t tf);
   int8_t getTokenCnt() { return _tokenCnt; }
   const char *getResponse() { return _respBufOrig; }
+  // Returns an interior pointer into the response buffer, which the next
+  // response overwrites. Callbacks must copy anything they intend to keep;
+  // storing the pointer leaves a dangling reference. Returns NULL past the
+  // token count.
   const char *getToken(int i) {
     if (i < _tokenCnt) return _tokens[i];
     else return NULL;

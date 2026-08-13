@@ -168,6 +168,13 @@ RapiSender::_tokenize() {
 
 void RapiSender::_commandComplete(int result)
 {
+  // Hazard, not currently reachable: _waitingForReply stays set for the whole
+  // of the handler call, so a handler that itself calls sendCmdSync() or
+  // flush() re-enters loop() and arrives back here, invoking the same handler
+  // a second time. _sendNextCmd() would then assign to _completeHandler while
+  // its operator() is still on the stack. No caller does this today; fixing it
+  // properly means deciding whether a nested synchronous send should be
+  // allowed at all, which is a bigger change than this branch should make.
   if(_waitingForReply) {
     if(nullptr != _completeHandler) {
       _completeHandler(result);
@@ -222,13 +229,6 @@ RapiSender::sendCmd(const __FlashStringHelper *cmdstr, RapiCommandCompleteHandle
 
 int
 RapiSender::sendCmdSync(const char *cmdstr, unsigned long timeout) {
-  String cmd = cmdstr;
-  return sendCmdSync(cmd, timeout);
-}
-
-int
-RapiSender::sendCmdSync(String &cmdstr, unsigned long timeout)
-{
   struct SendCmdSyncData
   {
     int ret;
@@ -236,10 +236,12 @@ RapiSender::sendCmdSync(String &cmdstr, unsigned long timeout)
   } resultData = {0, false};
   SendCmdSyncData *result = &resultData;
 
+  // The caller's timeout was previously dropped here, so every synchronous
+  // command used the RAPI_TIMEOUT_MS default no matter what was asked for.
   sendCmd(cmdstr, [result](int ret) {
     result->ret = ret;
     result->finished = true;
-  });
+  }, timeout);
 
   while(!result->finished) {
     loop();
@@ -249,8 +251,16 @@ RapiSender::sendCmdSync(String &cmdstr, unsigned long timeout)
 }
 
 int
+RapiSender::sendCmdSync(String &cmdstr, unsigned long timeout)
+{
+  return sendCmdSync(cmdstr.c_str(), timeout);
+}
+
+int
 RapiSender::sendCmdSync(const __FlashStringHelper *cmdstr, unsigned long timeout) {
-  String cmd = cmdstr;
+  char cmd[RAPI_CMD_BUFLEN + 1];
+  strncpy_P(cmd, (PGM_P)cmdstr, sizeof(cmd));
+  cmd[sizeof(cmd) - 1] = '\0';
   return sendCmdSync(cmd, timeout);
 }
 
