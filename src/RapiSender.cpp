@@ -64,7 +64,7 @@ void RapiSender::_sendNextCmd()
   CommandItem cmd;
   if(_commandQueue.pop(cmd))
   {
-    _sendCmd(cmd.command.c_str());
+    _sendCmd(cmd.command);
     _completeHandler = cmd.handler;
     _timeout = millis() + cmd.timeout;
     _waitingForReply = true;
@@ -179,17 +179,22 @@ void RapiSender::_commandComplete(int result)
 
 void
 RapiSender::sendCmd(const char *cmdstr, RapiCommandCompleteHandler callback, unsigned long timeout) {
-  String cmd = cmdstr;
-  return sendCmd(cmd, callback, timeout);
-}
+  CommandItem cmd;
 
-void
-RapiSender::sendCmd(String &cmdstr, RapiCommandCompleteHandler callback, unsigned long timeout) {
-  CommandItem cmd = {
-    cmdstr,
-    callback,
-    timeout
-  };
+  // Reject rather than truncate. A truncated RAPI command is still a valid
+  // command with a different meaning -- "$SC 32" cut to "$SC 3" would set a
+  // different current -- so silently shortening one is worse than refusing it.
+  if(strlen(cmdstr) >= sizeof(cmd.command)) {
+    if(nullptr != callback) {
+      callback(RAPI_RESPONSE_CMD_TOO_LONG);
+    }
+    return;
+  }
+
+  strcpy(cmd.command, cmdstr);
+  cmd.handler = callback;
+  cmd.timeout = timeout;
+
   if(_commandQueue.push(cmd)) {
     if(!_waitingForReply) {
       _sendNextCmd();
@@ -200,8 +205,18 @@ RapiSender::sendCmd(String &cmdstr, RapiCommandCompleteHandler callback, unsigne
 }
 
 void
+RapiSender::sendCmd(String &cmdstr, RapiCommandCompleteHandler callback, unsigned long timeout) {
+  return sendCmd(cmdstr.c_str(), callback, timeout);
+}
+
+void
 RapiSender::sendCmd(const __FlashStringHelper *cmdstr, RapiCommandCompleteHandler callback, unsigned long timeout) {
-  String cmd = cmdstr;
+  // One byte longer than the queue's buffer, so that a string too long to
+  // queue still ends up too long here and is rejected by the char* overload
+  // rather than arriving silently truncated to a valid-looking command.
+  char cmd[RAPI_CMD_BUFLEN + 1];
+  strncpy_P(cmd, (PGM_P)cmdstr, sizeof(cmd));
+  cmd[sizeof(cmd) - 1] = '\0';
   return sendCmd(cmd, callback, timeout);
 }
 
