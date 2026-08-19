@@ -35,11 +35,20 @@
 #endif
 
 // Inline storage for a queued completion callback. The callbacks in this
-// library are `[this, callback]` lambdas, where `callback` is a 16-byte
-// std::function -- 20 bytes. 40 leaves room without being wasteful, and
-// anything larger is a compile error rather than a silent heap allocation.
+// library are `[this, callback]` lambdas, where `callback` is a std::function:
+// on a 32-bit target that is a 4-byte `this` plus a 16-byte std::function, so
+// 20 bytes, and 40 leaves room without being wasteful.
+//
+// Both halves scale with the pointer width, so size the buffer that way rather
+// than hard-coding the 32-bit answer. A fixed 40 compiles on the ESP32 and
+// trips the static_assert below on a 64-bit host, which breaks every native /
+// EpoxyDuino build that links this library while the hardware targets stay
+// green -- so CI on device builds alone will not catch it.
+//
+// Anything that still does not fit is a compile error rather than a silent
+// heap allocation, which is the whole point of the inline storage.
 #ifndef RAPI_HANDLER_CAPACITY
-#define RAPI_HANDLER_CAPACITY 40
+#define RAPI_HANDLER_CAPACITY (sizeof(void *) * 10)
 #endif
 
 #define RAPI_RESPONSE_NOT_CONNECTED          -4
