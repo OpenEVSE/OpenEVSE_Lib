@@ -14,7 +14,7 @@ public:
   Queue(T *values, size_t size)
       : values(values), size(size), head(0), tail(0) {}
 
-  bool push(T item) {
+  bool push(const T &item) {
     if (!full()) {
       values[head] = item;
 
@@ -28,6 +28,10 @@ public:
   bool pop(T &item) {
     if (!empty()) {
       item = values[tail];
+      // Release the slot. Without this the array keeps a copy of every item
+      // that has passed through it, so anything the item owns stays alive for
+      // the lifetime of the queue rather than the lifetime of the item.
+      values[tail] = T();
       tail = nextSlot(tail);
       return true;
     }

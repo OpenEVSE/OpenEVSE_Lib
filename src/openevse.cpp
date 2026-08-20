@@ -57,6 +57,7 @@ void OpenEVSEClass::begin(RapiSender &sender, std::function<void(bool connected,
 void OpenEVSEClass::getVersion(std::function<void(int ret, const char *firmware, const char *protocol)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED, NULL, NULL);
     return;
   }
 
@@ -83,6 +84,7 @@ void OpenEVSEClass::getVersion(std::function<void(int ret, const char *firmware,
 void OpenEVSEClass::getStatus(std::function<void(int ret, uint8_t evse_state, uint32_t session_time, uint8_t pilot_state, uint32_t vflags)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED, OPENEVSE_STATE_INVALID, 0, OPENEVSE_STATE_INVALID, 0);
     return;
   }
 
@@ -126,6 +128,7 @@ void OpenEVSEClass::getStatus(std::function<void(int ret, uint8_t evse_state, ui
 void OpenEVSEClass::getTime(std::function<void(int ret, time_t time)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED, 0);
     return;
   }
 
@@ -187,6 +190,7 @@ void OpenEVSEClass::setTime(time_t time, std::function<void(int ret)> callback)
 void OpenEVSEClass::setTime(tm &time, std::function<void(int ret)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED);
     return;
   }
 
@@ -219,6 +223,7 @@ void OpenEVSEClass::setTime(tm &time, std::function<void(int ret)> callback)
 void OpenEVSEClass::getChargeCurrentAndVoltage(std::function<void(int ret, double amps, double volts)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED, 0, 0);
     return;
   }
 
@@ -249,6 +254,7 @@ void OpenEVSEClass::getChargeCurrentAndVoltage(std::function<void(int ret, doubl
 void OpenEVSEClass::getTemperature(std::function<void(int ret, double temp1, bool temp1_valid, double temp2, bool temp2_valid, double temp3, bool temp3_valid)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED, 0, false, 0, false, 0, false);
     return;
   }
 
@@ -284,6 +290,7 @@ void OpenEVSEClass::getTemperature(std::function<void(int ret, double temp1, boo
 void OpenEVSEClass::getEnergy(std::function<void(int ret, double session_wh, double total_kwh)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED, 0, 0);
     return;
   }
 
@@ -317,6 +324,7 @@ void OpenEVSEClass::getEnergy(std::function<void(int ret, double session_wh, dou
 void OpenEVSEClass::getFaultCounters(std::function<void(int ret, long gfci_count, long nognd_count, long stuck_count)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED, 0, 0, 0);
     return;
   }
 
@@ -352,6 +360,7 @@ void OpenEVSEClass::getFaultCounters(std::function<void(int ret, long gfci_count
 void OpenEVSEClass::getSettings(std::function<void(int ret, long pilot, uint32_t flags)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED, 0, 0);
     return;
   }
 
@@ -384,6 +393,7 @@ void OpenEVSEClass::getSettings(std::function<void(int ret, long pilot, uint32_t
 void OpenEVSEClass::getSerial(std::function<void(int ret, const char *serial)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED, NULL);
     return;
   }
 
@@ -421,6 +431,7 @@ void OpenEVSEClass::getSerial(std::function<void(int ret, const char *serial)> c
 void OpenEVSEClass::getFrequency(std::function<void(int ret, uint32_t frequency)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED, 0);
     return;
   }
 
@@ -455,6 +466,7 @@ void OpenEVSEClass::getFrequency(std::function<void(int ret, uint32_t frequency)
 void OpenEVSEClass::getRelayStatus(std::function<void(int ret, bool dc1, bool dc2, bool ac)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED, false, false, false);
     return;
   }
 
@@ -492,6 +504,7 @@ void OpenEVSEClass::getRelayStatus(std::function<void(int ret, bool dc1, bool dc
 void OpenEVSEClass::setRelayEnable(int relay, bool enable, std::function<void(int ret)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED);
     return;
   }
 
@@ -515,6 +528,7 @@ void OpenEVSEClass::setRelayEnable(int relay, bool enable, std::function<void(in
 void OpenEVSEClass::resetFaultCounters(std::function<void(int ret)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED);
     return;
   }
 
@@ -534,6 +548,7 @@ void OpenEVSEClass::resetFaultCounters(std::function<void(int ret)> callback)
 void OpenEVSEClass::setPanicTemperature(uint32_t tempC, std::function<void(int ret)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED);
     return;
   }
 
@@ -557,6 +572,7 @@ void OpenEVSEClass::setPanicTemperature(uint32_t tempC, std::function<void(int r
 void OpenEVSEClass::setServiceLevel(uint8_t level, std::function<void(int ret)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED);
     return;
   }
 
@@ -564,6 +580,17 @@ void OpenEVSEClass::setServiceLevel(uint8_t level, std::function<void(int ret)> 
   //  $SL 1*14
   //  $SL 2*15
   //  $SL A*24
+
+  // The protocol defines exactly three levels. Anything else would be sent
+  // verbatim, and a byte such as a space or CR would split the frame into a
+  // different command.
+  if(OPENEVSE_SERVICE_LEVEL_L1 != level &&
+     OPENEVSE_SERVICE_LEVEL_L2 != level &&
+     OPENEVSE_SERVICE_LEVEL_AUTO != level)
+  {
+    callback(RAPI_RESPONSE_INVALID_RESPONSE);
+    return;
+  }
 
   char command[8];
   snprintf(command, sizeof(command), "$SL %c", level);
@@ -576,6 +603,7 @@ void OpenEVSEClass::setServiceLevel(uint8_t level, std::function<void(int ret)> 
 void OpenEVSEClass::getCurrentCapacity(std::function<void(int ret, long min_current, long pilot, long max_configured_current, long max_hardware_current)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED, 0, 0, 0, 0);
     return;
   }
 
@@ -629,6 +657,7 @@ void OpenEVSEClass::setCurrentCapacityFactoryLimit(long amps, std::function<void
 void OpenEVSEClass::setCurrentCapacity(long amps, const char *mode, std::function<void(int ret, long pilot)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED, 0);
     return;
   }
 
@@ -678,6 +707,7 @@ void OpenEVSEClass::setCurrentCapacity(long amps, const char *mode, std::functio
 void OpenEVSEClass::getAmmeterSettings(std::function<void(int ret, long scale, long offset)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED, 0, 0);
     return;
   }
 
@@ -710,6 +740,7 @@ void OpenEVSEClass::getAmmeterSettings(std::function<void(int ret, long scale, l
 void OpenEVSEClass::setAmmeterSettings(long scale, long offset, std::function<void(int ret)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED);
     return;
   }
 
@@ -737,6 +768,7 @@ void OpenEVSEClass::setAmmeterSettings(long scale, long offset, std::function<vo
 void OpenEVSEClass::setVoltage(uint32_t milliVolts, std::function<void(int ret)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED);
     return;
   }
 
@@ -773,6 +805,7 @@ void OpenEVSEClass::setVoltage(double volts, std::function<void(int ret)> callba
 void OpenEVSEClass::getTimer(std::function<void(int ret, int start_hour, int start_minute, int end_hour, int end_minute)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED, 0, 0, 0, 0);
     return;
   }
 
@@ -805,6 +838,7 @@ void OpenEVSEClass::getTimer(std::function<void(int ret, int start_hour, int sta
 void OpenEVSEClass::setTimer(int start_hour, int start_minute, int end_hour, int end_minute, std::function<void(int ret)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED);
     return;
   }
 
@@ -833,6 +867,7 @@ void OpenEVSEClass::setTimer(int start_hour, int start_minute, int end_hour, int
 void OpenEVSEClass::enable(std::function<void(int ret)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED);
     return;
   }
 
@@ -847,6 +882,7 @@ void OpenEVSEClass::enable(std::function<void(int ret)> callback)
 void OpenEVSEClass::sleep(std::function<void(int ret)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED);
     return;
   }
 
@@ -861,11 +897,12 @@ void OpenEVSEClass::sleep(std::function<void(int ret)> callback)
 void OpenEVSEClass::disable(std::function<void(int ret)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED);
     return;
   }
 
-  // FR - restart EVSE
-  //  $FR*BC
+  // FD - disable EVSE
+  //  $FD*AE
 
   _sender->sendCmd("$FD", [this, callback](int ret) {
     callback(ret);
@@ -875,11 +912,12 @@ void OpenEVSEClass::disable(std::function<void(int ret)> callback)
 void OpenEVSEClass::restart(std::function<void(int ret)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED);
     return;
   }
 
-  // FD - disable EVSE
-  //  $FD*AE
+  // FR - restart EVSE
+  //  $FR*BC
 
   _sender->sendCmd("$FR", [this, callback](int ret) {
     callback(ret);
@@ -889,6 +927,7 @@ void OpenEVSEClass::restart(std::function<void(int ret)> callback)
 void OpenEVSEClass::clearBootLock(std::function<void(int ret)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED);
     return;
   }
   // SB - clear BOOTLOCK
@@ -902,6 +941,7 @@ void OpenEVSEClass::clearBootLock(std::function<void(int ret)> callback)
 void OpenEVSEClass::feature(uint8_t feature, bool enable, std::function<void(int ret)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED);
     return;
   }
 
@@ -923,6 +963,14 @@ void OpenEVSEClass::feature(uint8_t feature, bool enable, std::function<void(int
   //  $FF D 0 - disable diode check
   //  $FF G 1 - enable ground check
 
+  // Deliberately not checked against the OPENEVSE_FEATURE_* list: controller
+  // firmware adds feature letters over time and the library should not be the
+  // thing blocking a new one. Reject only what would corrupt the frame.
+  if(feature <= ' ' || feature > '~') {
+    callback(RAPI_RESPONSE_INVALID_RESPONSE);
+    return;
+  }
+
   char command[64];
   snprintf(command, sizeof(command), "$FF %c %d", feature, enable ? 1 : 0);
 
@@ -934,6 +982,7 @@ void OpenEVSEClass::feature(uint8_t feature, bool enable, std::function<void(int
 void OpenEVSEClass::lcdEnable(bool enable, std::function<void(int ret)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED);
     return;
   }
 
@@ -953,6 +1002,7 @@ void OpenEVSEClass::lcdEnable(bool enable, std::function<void(int ret)> callback
 void OpenEVSEClass::lcdSetColour(int colour, std::function<void(int ret)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED);
     return;
   }
 
@@ -980,6 +1030,7 @@ void OpenEVSEClass::lcdSetColour(int colour, std::function<void(int ret)> callba
 void OpenEVSEClass::lcdDisplayText(int x, int y, const char *text, std::function<void(int ret)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED);
     return;
   }
 
@@ -989,8 +1040,10 @@ void OpenEVSEClass::lcdDisplayText(int x, int y, const char *text, std::function
   snprintf(command, sizeof(command), "$FP %d %d %s", x, y, text);
 
   // replace spaces in the message with the magic char
+  // Note: text longer than the buffer is truncated by snprintf above.
   int expected_spaces = 3;
-  for(int i = 0; i < strlen(command); i++)
+  int command_len = strlen(command);
+  for(int i = 0; i < command_len; i++)
   {
     if(command[i] == ' ' && --expected_spaces < 0) {
       command[i] = OPENEVSE_LCD_SPACE_MAGIC_CHAR;
@@ -1005,6 +1058,7 @@ void OpenEVSEClass::lcdDisplayText(int x, int y, const char *text, std::function
 void OpenEVSEClass::heartbeatEnable(int interval, int current, std::function<void(int ret, int interval, int current, int triggered)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED, 0, 0, 0);
     return;
   }
 
@@ -1044,6 +1098,7 @@ void OpenEVSEClass::heartbeatEnable(int interval, int current, std::function<voi
 void OpenEVSEClass::heartbeatPulse(bool ack_missed, std::function<void(int ret)> callback)
 {
   if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED);
     return;
   }
 
@@ -1084,10 +1139,24 @@ void OpenEVSEClass::onEvent()
     return;
   }
 
+  // getToken() returns NULL for any index at or past the token count, and
+  // strtol(NULL) dereferences it. An async frame carrying fewer fields than
+  // expected is not corruption -- the checksum has already been verified -- so
+  // it has to be handled rather than assumed away. Every branch below checks
+  // the count first, as the request handlers elsewhere in this file do.
+  int tokens = _sender->getTokenCnt();
+  if(tokens < 1) {
+    return;
+  }
+
   DBUGF("Got ASYNC event %s", _sender->getToken(0));
 
   if(!strcmp(_sender->getToken(0), "$ST"))
   {
+    if(tokens < 2) {
+      return;
+    }
+
     const char *val = _sender->getToken(1);
     DBUGVAR(val);
     uint8_t state = strtol(val, NULL, 16);
@@ -1099,6 +1168,10 @@ void OpenEVSEClass::onEvent()
   }
   else if(!strcmp(_sender->getToken(0), "$WF"))
   {
+    if(tokens < 2) {
+      return;
+    }
+
     const char *val = _sender->getToken(1);
     DBUGVAR(val);
 
@@ -1111,6 +1184,10 @@ void OpenEVSEClass::onEvent()
   }
   else if(!strcmp(_sender->getToken(0), "$AT"))
   {
+    if(tokens < 5) {
+      return;
+    }
+
     const char *val = _sender->getToken(1);
     uint8_t evse_state = strtol(val, NULL, 16);
 
@@ -1131,6 +1208,12 @@ void OpenEVSEClass::onEvent()
   }
   else if(!strcmp(_sender->getToken(0), "$AB"))
   {
+    // Three tokens, not two: the firmware string is handed to the callback and
+    // consumers dereference it without a NULL check.
+    if(tokens < 3) {
+      return;
+    }
+
     const char *val = _sender->getToken(1);
     uint8_t post_code = strtol(val, NULL, 16);
 
@@ -1140,6 +1223,10 @@ void OpenEVSEClass::onEvent()
   }
   else if(!strcmp(_sender->getToken(0), "$AN"))
   {
+    if(tokens < 2) {
+      return;
+    }
+
     const char *val = _sender->getToken(1);
     uint8_t log_press = strtol(val, NULL, 10);
 
