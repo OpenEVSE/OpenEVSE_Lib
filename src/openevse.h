@@ -100,6 +100,12 @@
 // reporting an older protocol NAK these commands, so they are gated.
 #define OPENEVSE_D9_SUPPORT_PROTOCOL_VERSION    OPENEVSE_ENCODE_VERSION(6,0,0)
 
+// sentinel value returned by getRelayHealth() for the transit-baseline and
+// thermal fields when that signal isn't available: baseline not yet
+// established, or (thermal fields only) the controller wasn't built with
+// TEMPERATURE_MONITORING
+#define OPENEVSE_RELAY_HEALTH_NOT_AVAILABLE 0xffff
+
 #define OPENEVSE_LCD_OFF      0
 #define OPENEVSE_LCD_RED      1
 #define OPENEVSE_LCD_GREEN    2
@@ -172,6 +178,11 @@ class OpenEVSEClass
     void setRelayEnable(int relay, bool enable, std::function<void(int ret)> callback);
     void resetFaultCounters(std::function<void(int ret)> callback);
     void setPanicTemperature(uint32_t tempC, std::function<void(int ret)> callback);
+
+    // relay contact-life health estimate (requires the RELAY_HEALTH firmware
+    // feature, shipped alongside $GW/$GZ under the same D9 protocol gate)
+    void getRelayHealth(std::function<void(int ret, uint8_t life_remaining_pct, uint32_t cold_open_count, uint32_t elec_damage_x1e6, uint32_t transit_baseline_ms, bool transit_drift_warning, uint32_t thermal_index_x100, uint32_t thermal_baseline_x100, uint8_t thermal_warning_level)> callback);
+    void resetRelayHealth(std::function<void(int ret)> callback);
 
     void setServiceLevel(uint8_t level, std::function<void(int ret)> callback);
 

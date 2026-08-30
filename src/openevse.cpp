@@ -525,6 +525,91 @@ void OpenEVSEClass::setRelayEnable(int relay, bool enable, std::function<void(in
   });
 }
 
+void OpenEVSEClass::getRelayHealth(std::function<void(int ret, uint8_t life_remaining_pct, uint32_t cold_open_count, uint32_t elec_damage_x1e6, uint32_t transit_baseline_ms, bool transit_drift_warning, uint32_t thermal_index_x100, uint32_t thermal_baseline_x100, uint8_t thermal_warning_level)> callback)
+{
+  if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED, 0, 0, 0, 0, false, 0, 0, 0);
+    return;
+  }
+
+  // GL - get relay Life/health estimate (linco-work D9 firmware, requires
+  // the controller's RELAY_HEALTH feature - auto-enabled wherever the $GW/
+  // $GZ relay-life diagnostics are)
+  //  response: $OK pctremain coldopencnt elecdamagex1e6 transitbaselinems transitdrift thermalx100 thermalbaselinex100 thermalwarn
+  //  pctremain: estimated relay life remaining, 0-100. Combines a Miner's-
+  //    rule electrical-damage accumulator (hot opens, weighted by
+  //    (I/I_rated)^2 * load-character * temperature) with a mechanical-
+  //    damage term (cold opens / rated mechanical life)
+  //  coldopencnt: cumulative cold (non-arced) relay-open count
+  //  elecdamagex1e6: raw electrical-damage accumulator, millionths of rated
+  //    electrical life consumed (1000000 = 100%) - debug/trend field
+  //  transitbaselinems: self-learned open (drop-out) transit-time baseline,
+  //    ms. OPENEVSE_RELAY_HEALTH_NOT_AVAILABLE if not yet established
+  //    (needs 8 post-reset measurements; requires CGMI hardware)
+  //  transitdrift: true if the live open-transit time has drifted >=1.5x the
+  //    baseline - an early symptom of contact welding, ahead of the hard
+  //    stuck-relay fault
+  //  thermalx100: most recent deltaT/I^2 sample x100, proportional to
+  //    contact resistance. OPENEVSE_RELAY_HEALTH_NOT_AVAILABLE if not
+  //    available (controller lacks TEMPERATURE_MONITORING, no session yet,
+  //    or current below the controller's sampling floor)
+  //  thermalbaselinex100: self-learned baseline H0 x100.
+  //    OPENEVSE_RELAY_HEALTH_NOT_AVAILABLE if not yet established/available
+  //  thermalwarn: 0=ok/not available 1=watch (>=1.5x baseline) 2=warn (>=2x baseline)
+
+  if (!isD9Supported()) {
+    callback(RAPI_RESPONSE_FEATURE_NOT_SUPPORTED, 0, 0, 0, 0, false, 0, 0, 0);
+    return;
+  }
+
+  _sender->sendCmd("$GL", [this, callback](int ret)
+  {
+    if (RAPI_RESPONSE_OK == ret)
+    {
+      if(_sender->getTokenCnt() >= 9)
+      {
+        uint8_t  life_remaining_pct    = (uint8_t)strtoul(_sender->getToken(1), NULL, 10);
+        uint32_t cold_open_count       = strtoul(_sender->getToken(2), NULL, 10);
+        uint32_t elec_damage_x1e6      = strtoul(_sender->getToken(3), NULL, 10);
+        uint32_t transit_baseline_ms   = strtoul(_sender->getToken(4), NULL, 10);
+        bool     transit_drift_warning = strtoul(_sender->getToken(5), NULL, 10) != 0;
+        uint32_t thermal_index_x100    = strtoul(_sender->getToken(6), NULL, 10);
+        uint32_t thermal_baseline_x100 = strtoul(_sender->getToken(7), NULL, 10);
+        uint8_t  thermal_warning_level = (uint8_t)strtoul(_sender->getToken(8), NULL, 10);
+
+        callback(ret, life_remaining_pct, cold_open_count, elec_damage_x1e6, transit_baseline_ms, transit_drift_warning, thermal_index_x100, thermal_baseline_x100, thermal_warning_level);
+      } else {
+        callback(RAPI_RESPONSE_INVALID_RESPONSE, 0, 0, 0, 0, false, 0, 0, 0);
+      }
+    } else {
+      callback(ret, 0, 0, 0, 0, false, 0, 0, 0);
+    }
+  });
+}
+
+void OpenEVSEClass::resetRelayHealth(std::function<void(int ret)> callback)
+{
+  if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED);
+    return;
+  }
+
+  // FH - reset relay Health/life estimate (linco-work D9 firmware, requires
+  // RELAY_HEALTH)
+  //  clears the cumulative-damage accumulator and the transit-time/thermal-
+  //  index self-learned baselines - use after replacing the contactor, so
+  //  the estimate doesn't carry over wear from the old relay
+
+  if (!isD9Supported()) {
+    callback(RAPI_RESPONSE_FEATURE_NOT_SUPPORTED);
+    return;
+  }
+
+  _sender->sendCmd("$FH", [this, callback](int ret) {
+    callback(ret);
+  });
+}
+
 void OpenEVSEClass::resetFaultCounters(std::function<void(int ret)> callback)
 {
   if (!_sender) {
