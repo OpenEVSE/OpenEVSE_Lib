@@ -180,9 +180,19 @@ class OpenEVSEClass
     void setPanicTemperature(uint32_t tempC, std::function<void(int ret)> callback);
 
     // relay contact-life health estimate (requires the RELAY_HEALTH firmware
-    // feature, shipped alongside $GW/$GZ under the same D9 protocol gate)
-    void getRelayHealth(std::function<void(int ret, uint8_t life_remaining_pct, uint32_t cold_open_count, uint32_t elec_damage_x1e6, uint32_t transit_baseline_ms, bool transit_drift_warning, uint32_t thermal_index_x100, uint32_t thermal_baseline_x100, uint8_t thermal_warning_level)> callback);
+    // feature, shipped alongside $GW/$GZ under the same D9 protocol gate).
+    // stuck_relay_recovery_count requires firmware 9.3.0+ ($GL's 9th field -
+    // older 9.2.x controllers simply don't send it, so this reads back 0)
+    void getRelayHealth(std::function<void(int ret, uint8_t life_remaining_pct, uint32_t cold_open_count, uint32_t elec_damage_x1e6, uint32_t transit_baseline_ms, bool transit_drift_warning, uint32_t thermal_index_x100, uint32_t thermal_baseline_x100, uint8_t thermal_warning_level, uint32_t stuck_relay_recovery_count)> callback);
     void resetRelayHealth(std::function<void(int ret)> callback);
+
+    // Manually run the stuck-relay recovery cycle (firmware 9.3.0+, requires
+    // ADVPWR). NAK'd by the controller if an EV is connected. Blocking on
+    // the controller side for up to ~30s before it responds - use a longer
+    // RapiSender timeout than the default for this call. Does not itself
+    // report whether the relay came free; check getStatus()/getRelayHealth()
+    // afterward.
+    void runStuckRelayRecovery(std::function<void(int ret)> callback);
 
     void setServiceLevel(uint8_t level, std::function<void(int ret)> callback);
 

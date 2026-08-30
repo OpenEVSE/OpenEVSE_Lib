@@ -525,17 +525,17 @@ void OpenEVSEClass::setRelayEnable(int relay, bool enable, std::function<void(in
   });
 }
 
-void OpenEVSEClass::getRelayHealth(std::function<void(int ret, uint8_t life_remaining_pct, uint32_t cold_open_count, uint32_t elec_damage_x1e6, uint32_t transit_baseline_ms, bool transit_drift_warning, uint32_t thermal_index_x100, uint32_t thermal_baseline_x100, uint8_t thermal_warning_level)> callback)
+void OpenEVSEClass::getRelayHealth(std::function<void(int ret, uint8_t life_remaining_pct, uint32_t cold_open_count, uint32_t elec_damage_x1e6, uint32_t transit_baseline_ms, bool transit_drift_warning, uint32_t thermal_index_x100, uint32_t thermal_baseline_x100, uint8_t thermal_warning_level, uint32_t stuck_relay_recovery_count)> callback)
 {
   if (!_sender) {
-    callback(RAPI_RESPONSE_NOT_CONNECTED, 0, 0, 0, 0, false, 0, 0, 0);
+    callback(RAPI_RESPONSE_NOT_CONNECTED, 0, 0, 0, 0, false, 0, 0, 0, 0);
     return;
   }
 
   // GL - get relay Life/health estimate (linco-work D9 firmware, requires
   // the controller's RELAY_HEALTH feature - auto-enabled wherever the $GW/
   // $GZ relay-life diagnostics are)
-  //  response: $OK pctremain coldopencnt elecdamagex1e6 transitbaselinems transitdrift thermalx100 thermalbaselinex100 thermalwarn
+  //  response: $OK pctremain coldopencnt elecdamagex1e6 transitbaselinems transitdrift thermalx100 thermalbaselinex100 thermalwarn [stuckrelayrecoverycnt]
   //  pctremain: estimated relay life remaining, 0-100. Combines a Miner's-
   //    rule electrical-damage accumulator (hot opens, weighted by
   //    (I/I_rated)^2 * load-character * temperature) with a mechanical-
@@ -556,9 +556,12 @@ void OpenEVSEClass::getRelayHealth(std::function<void(int ret, uint8_t life_rema
   //  thermalbaselinex100: self-learned baseline H0 x100.
   //    OPENEVSE_RELAY_HEALTH_NOT_AVAILABLE if not yet established/available
   //  thermalwarn: 0=ok/not available 1=watch (>=1.5x baseline) 2=warn (>=2x baseline)
+  //  stuckrelayrecoverycnt (firmware 9.3.0+ only): cumulative count of
+  //    stuck-relay recovery attempts run (automatic or via $FK). Older
+  //    controllers don't send this field - reads back as 0.
 
   if (!isD9Supported()) {
-    callback(RAPI_RESPONSE_FEATURE_NOT_SUPPORTED, 0, 0, 0, 0, false, 0, 0, 0);
+    callback(RAPI_RESPONSE_FEATURE_NOT_SUPPORTED, 0, 0, 0, 0, false, 0, 0, 0, 0);
     return;
   }
 
@@ -576,13 +579,17 @@ void OpenEVSEClass::getRelayHealth(std::function<void(int ret, uint8_t life_rema
         uint32_t thermal_index_x100    = strtoul(_sender->getToken(6), NULL, 10);
         uint32_t thermal_baseline_x100 = strtoul(_sender->getToken(7), NULL, 10);
         uint8_t  thermal_warning_level = (uint8_t)strtoul(_sender->getToken(8), NULL, 10);
+        // 9th field is newer than the rest (firmware 9.3.0+) - default to 0
+        // against an older controller rather than failing the whole response
+        uint32_t stuck_relay_recovery_count = (_sender->getTokenCnt() >= 10) ?
+          strtoul(_sender->getToken(9), NULL, 10) : 0;
 
-        callback(ret, life_remaining_pct, cold_open_count, elec_damage_x1e6, transit_baseline_ms, transit_drift_warning, thermal_index_x100, thermal_baseline_x100, thermal_warning_level);
+        callback(ret, life_remaining_pct, cold_open_count, elec_damage_x1e6, transit_baseline_ms, transit_drift_warning, thermal_index_x100, thermal_baseline_x100, thermal_warning_level, stuck_relay_recovery_count);
       } else {
-        callback(RAPI_RESPONSE_INVALID_RESPONSE, 0, 0, 0, 0, false, 0, 0, 0);
+        callback(RAPI_RESPONSE_INVALID_RESPONSE, 0, 0, 0, 0, false, 0, 0, 0, 0);
       }
     } else {
-      callback(ret, 0, 0, 0, 0, false, 0, 0, 0);
+      callback(ret, 0, 0, 0, 0, false, 0, 0, 0, 0);
     }
   });
 }
@@ -596,9 +603,10 @@ void OpenEVSEClass::resetRelayHealth(std::function<void(int ret)> callback)
 
   // FH - reset relay Health/life estimate (linco-work D9 firmware, requires
   // RELAY_HEALTH)
-  //  clears the cumulative-damage accumulator and the transit-time/thermal-
-  //  index self-learned baselines - use after replacing the contactor, so
-  //  the estimate doesn't carry over wear from the old relay
+  //  clears the cumulative-damage accumulator, the transit-time/thermal-
+  //  index self-learned baselines, and (firmware 9.3.0+) the stuck-relay
+  //  recovery counter - use after replacing the contactor, so the estimate
+  //  doesn't carry over wear from the old relay
 
   if (!isD9Supported()) {
     callback(RAPI_RESPONSE_FEATURE_NOT_SUPPORTED);
@@ -608,6 +616,34 @@ void OpenEVSEClass::resetRelayHealth(std::function<void(int ret)> callback)
   _sender->sendCmd("$FH", [this, callback](int ret) {
     callback(ret);
   });
+}
+
+void OpenEVSEClass::runStuckRelayRecovery(std::function<void(int ret)> callback)
+{
+  if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED);
+    return;
+  }
+
+  // FK - run stucK relay recovery cycle manually (linco-work D9 firmware,
+  // firmware 9.3.0+, requires ADVPWR)
+  //  Cycles the relay to try to free a welded/stuck contact - the same
+  //  routine the controller runs automatically on EVSE_STATE_STUCK_RELAY
+  //  entry. NAK'd if an EV is connected (unsafe to cycle the relay under
+  //  load). Blocking on the controller side for up to ~30s before it
+  //  responds, hence the extended timeout below - the default
+  //  RAPI_TIMEOUT_MS (500ms) would time this out long before the controller
+  //  replies. Does not itself report whether the relay came free; check
+  //  getStatus() or getRelayHealth() afterward.
+
+  if (!isD9Supported()) {
+    callback(RAPI_RESPONSE_FEATURE_NOT_SUPPORTED);
+    return;
+  }
+
+  _sender->sendCmd("$FK", [this, callback](int ret) {
+    callback(ret);
+  }, 35000);
 }
 
 void OpenEVSEClass::resetFaultCounters(std::function<void(int ret)> callback)
