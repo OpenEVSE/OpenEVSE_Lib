@@ -646,6 +646,196 @@ void OpenEVSEClass::runStuckRelayRecovery(std::function<void(int ret)> callback)
   }, 35000);
 }
 
+// Translate one raw $GN field (10ths of a degree C, or a sentinel) into a
+// temperature/status pair.
+static void openevse_decodeCableTemp(const char *token, double &temp, uint8_t &status)
+{
+  long raw = strtol(token, NULL, 10);
+
+  switch (raw) {
+    case OPENEVSE_CABLE_TEMP_RAW_NOT_INSTALLED:
+      temp = 0; status = OPENEVSE_CABLE_TEMP_STATUS_NOT_INSTALLED; break;
+    case OPENEVSE_CABLE_TEMP_RAW_OPEN:
+      temp = 0; status = OPENEVSE_CABLE_TEMP_STATUS_OPEN; break;
+    case OPENEVSE_CABLE_TEMP_RAW_SHORTED:
+      temp = 0; status = OPENEVSE_CABLE_TEMP_STATUS_SHORTED; break;
+    default:
+      // Anything at or below the sentinel band is not a real reading either;
+      // treat an unrecognised one as "not installed" rather than handing the
+      // caller a wild negative temperature.
+      if (raw <= OPENEVSE_CABLE_TEMP_RAW_NOT_INSTALLED) {
+        temp = 0; status = OPENEVSE_CABLE_TEMP_STATUS_NOT_INSTALLED;
+      } else {
+        temp = (double)raw / 10.0; status = OPENEVSE_CABLE_TEMP_STATUS_OK;
+      }
+      break;
+  }
+}
+
+void OpenEVSEClass::getCableTemperatures(std::function<void(int ret, double ev1, uint8_t ev1_status, double ev2, uint8_t ev2_status, double in1, uint8_t in1_status, double in2, uint8_t in2_status)> callback)
+{
+  if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED, 0, OPENEVSE_CABLE_TEMP_STATUS_NOT_INSTALLED, 0, OPENEVSE_CABLE_TEMP_STATUS_NOT_INSTALLED, 0, OPENEVSE_CABLE_TEMP_STATUS_NOT_INSTALLED, 0, OPENEVSE_CABLE_TEMP_STATUS_NOT_INSTALLED);
+    return;
+  }
+
+  // GN - get cable temperatures (linco-work D9 firmware 9.4.0+, requires the
+  // controller's CABLE_TEMPERATURE_MONITORING feature)
+  //  response: $OK ev1 ev2 in1 in2
+  //  all in 10ths of a degree Celcius, or one of these sentinels:
+  //   -2560 = source unassigned, or the feature is disabled ($FF C 0)
+  //   -2561 = open circuit - no cable plugged in, or a disconnected/broken
+  //           thermistor. Also reported below about -40 C, where a very cold
+  //           cable and an open one are not distinguishable.
+  //   -2562 = shorted thermistor or wiring
+  //  n.b. neither open nor short faults the controller - a cable that is
+  //  simply unplugged reads open during normal operation. Only a valid
+  //  reading at or above the source's panic threshold trips a fault.
+
+  if (!isD9Supported()) {
+    callback(RAPI_RESPONSE_FEATURE_NOT_SUPPORTED, 0, OPENEVSE_CABLE_TEMP_STATUS_NOT_INSTALLED, 0, OPENEVSE_CABLE_TEMP_STATUS_NOT_INSTALLED, 0, OPENEVSE_CABLE_TEMP_STATUS_NOT_INSTALLED, 0, OPENEVSE_CABLE_TEMP_STATUS_NOT_INSTALLED);
+    return;
+  }
+
+  _sender->sendCmd("$GN", [this, callback](int ret)
+  {
+    if (RAPI_RESPONSE_OK == ret)
+    {
+      if(_sender->getTokenCnt() >= 5)
+      {
+        double temp[OPENEVSE_CABLE_TEMP_SOURCE_COUNT];
+        uint8_t status[OPENEVSE_CABLE_TEMP_SOURCE_COUNT];
+
+        for (int i = 0; i < OPENEVSE_CABLE_TEMP_SOURCE_COUNT; i++) {
+          openevse_decodeCableTemp(_sender->getToken(i + 1), temp[i], status[i]);
+        }
+
+        callback(ret, temp[0], status[0], temp[1], status[1], temp[2], status[2], temp[3], status[3]);
+      } else {
+        callback(RAPI_RESPONSE_INVALID_RESPONSE, 0, OPENEVSE_CABLE_TEMP_STATUS_NOT_INSTALLED, 0, OPENEVSE_CABLE_TEMP_STATUS_NOT_INSTALLED, 0, OPENEVSE_CABLE_TEMP_STATUS_NOT_INSTALLED, 0, OPENEVSE_CABLE_TEMP_STATUS_NOT_INSTALLED);
+      }
+    } else {
+      callback(ret, 0, OPENEVSE_CABLE_TEMP_STATUS_NOT_INSTALLED, 0, OPENEVSE_CABLE_TEMP_STATUS_NOT_INSTALLED, 0, OPENEVSE_CABLE_TEMP_STATUS_NOT_INSTALLED, 0, OPENEVSE_CABLE_TEMP_STATUS_NOT_INSTALLED);
+    }
+  });
+}
+
+void OpenEVSEClass::getCableTemperatureConfig(uint8_t source, std::function<void(int ret, uint8_t pin, uint32_t r25, uint32_t beta, int32_t offset_c10, int32_t panic_c10)> callback)
+{
+  if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED, OPENEVSE_CABLE_TEMP_PIN_NONE, 0, 0, 0, 0);
+    return;
+  }
+
+  // GN idx - get one cable temperature source's configuration (linco-work D9
+  // firmware 9.4.0+)
+  //  response: $OK pin r25 beta offset panic
+  //  pin:    0=unassigned 1=PP_READ 2=PP2_READ
+  //  r25:    NTC nominal resistance at 25 C, ohms
+  //  beta:   NTC beta coefficient
+  //  offset: calibration offset, 10ths of a degree C (signed)
+  //  panic:  shutdown threshold, 10ths of a degree C
+
+  if (!isD9Supported()) {
+    callback(RAPI_RESPONSE_FEATURE_NOT_SUPPORTED, OPENEVSE_CABLE_TEMP_PIN_NONE, 0, 0, 0, 0);
+    return;
+  }
+
+  if (source >= OPENEVSE_CABLE_TEMP_SOURCE_COUNT) {
+    callback(RAPI_RESPONSE_INVALID_RESPONSE, OPENEVSE_CABLE_TEMP_PIN_NONE, 0, 0, 0, 0);
+    return;
+  }
+
+  char command[16];
+  snprintf(command, sizeof(command), "$GN %u", (unsigned)source);
+
+  _sender->sendCmd(command, [this, callback](int ret)
+  {
+    if (RAPI_RESPONSE_OK == ret)
+    {
+      if(_sender->getTokenCnt() >= 6)
+      {
+        uint8_t  pin        = (uint8_t)strtoul(_sender->getToken(1), NULL, 10);
+        uint32_t r25        = strtoul(_sender->getToken(2), NULL, 10);
+        uint32_t beta       = strtoul(_sender->getToken(3), NULL, 10);
+        int32_t  offset_c10 = strtol(_sender->getToken(4), NULL, 10);
+        int32_t  panic_c10  = strtol(_sender->getToken(5), NULL, 10);
+
+        callback(ret, pin, r25, beta, offset_c10, panic_c10);
+      } else {
+        callback(RAPI_RESPONSE_INVALID_RESPONSE, OPENEVSE_CABLE_TEMP_PIN_NONE, 0, 0, 0, 0);
+      }
+    } else {
+      callback(ret, OPENEVSE_CABLE_TEMP_PIN_NONE, 0, 0, 0, 0);
+    }
+  });
+}
+
+void OpenEVSEClass::setCableTemperatureConfig(uint8_t source, uint8_t pin, uint32_t r25, uint32_t beta, int32_t offset_c10, int32_t panic_c10, std::function<void(int ret)> callback)
+{
+  if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED);
+    return;
+  }
+
+  // SN idx pin r25 beta offset panic - configure a cable temperature source
+  // (linco-work D9 firmware 9.4.0+)
+  //  Numeric ranges (r25 100-65535, beta 1000-6000, offset -2000..2000,
+  //  panic 300-1500) are enforced by the controller, which NAKs anything
+  //  outside them - deliberately not duplicated here, so a future firmware
+  //  widening a range does not need a library release to go with it.
+  //  n.b. assigning a source to pin 1 (PP_READ) makes the controller disable
+  //  PP auto-ampacity, since the two cannot share that pin.
+
+  if (!isD9Supported()) {
+    callback(RAPI_RESPONSE_FEATURE_NOT_SUPPORTED);
+    return;
+  }
+
+  if (source >= OPENEVSE_CABLE_TEMP_SOURCE_COUNT || pin > OPENEVSE_CABLE_TEMP_PIN_PP2) {
+    callback(RAPI_RESPONSE_INVALID_RESPONSE);
+    return;
+  }
+
+  char command[64];
+  snprintf(command, sizeof(command), "$SN %u %u %lu %lu %ld %ld",
+           (unsigned)source, (unsigned)pin,
+           (unsigned long)r25, (unsigned long)beta,
+           (long)offset_c10, (long)panic_c10);
+
+  _sender->sendCmd(command, [this, callback](int ret) {
+    callback(ret);
+  });
+}
+
+void OpenEVSEClass::setCableTemperaturePin(uint8_t source, uint8_t pin, std::function<void(int ret)> callback)
+{
+  if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED);
+    return;
+  }
+
+  // SN idx pin - reassign a cable temperature source's input pin, leaving its
+  // calibration untouched (linco-work D9 firmware 9.4.0+)
+
+  if (!isD9Supported()) {
+    callback(RAPI_RESPONSE_FEATURE_NOT_SUPPORTED);
+    return;
+  }
+
+  if (source >= OPENEVSE_CABLE_TEMP_SOURCE_COUNT || pin > OPENEVSE_CABLE_TEMP_PIN_PP2) {
+    callback(RAPI_RESPONSE_INVALID_RESPONSE);
+    return;
+  }
+
+  char command[16];
+  snprintf(command, sizeof(command), "$SN %u %u", (unsigned)source, (unsigned)pin);
+
+  _sender->sendCmd(command, [this, callback](int ret) {
+    callback(ret);
+  });
+}
+
 void OpenEVSEClass::resetFaultCounters(std::function<void(int ret)> callback)
 {
   if (!_sender) {
@@ -1078,6 +1268,7 @@ void OpenEVSEClass::feature(uint8_t feature, bool enable, std::function<void(int
   //    after its replies. Valid only over a serial connection, DO NOT USE on I2C
   //   F = GFI self test
   //   G = Ground check
+  //   C = Cable temperature monitoring (linco-work D9, firmware 9.4.0+)
   //   R = stuck Relay check
   //   T = temperature monitoring
   //   V = Vent required check

@@ -106,6 +106,41 @@
 // TEMPERATURE_MONITORING
 #define OPENEVSE_RELAY_HEALTH_NOT_AVAILABLE 0xffff
 
+// Cable NTC thermistor monitoring (linco-work D9 firmware 9.4.0+, requires
+// the controller's CABLE_TEMPERATURE_MONITORING feature). Four logical
+// sources, each configurable independently; EV1/EV2 are meant for the EV
+// (output) cable, IN1/IN2 for the input (supply) cable.
+#define OPENEVSE_CABLE_TEMP_SOURCE_EV1   0
+#define OPENEVSE_CABLE_TEMP_SOURCE_EV2   1
+#define OPENEVSE_CABLE_TEMP_SOURCE_IN1   2
+#define OPENEVSE_CABLE_TEMP_SOURCE_IN2   3
+#define OPENEVSE_CABLE_TEMP_SOURCE_COUNT 4
+
+// Which analog input a source is wired to. Only two physical inputs exist, so
+// at most two sources can be assigned at once.
+// n.b. PP_READ is shared with the proximity pilot: assigning a source to it
+// makes the controller disable PP auto-ampacity, and enabling PP
+// auto-ampacity ($FF P 1) makes the controller unassign every source on it.
+// Both happen silently - read back with getSettings() and
+// getCableTemperatureConfig() if you need to know which way it went.
+#define OPENEVSE_CABLE_TEMP_PIN_NONE 0 // unassigned - source disabled
+#define OPENEVSE_CABLE_TEMP_PIN_PP   1 // PP_READ  (ADC2 on 328P / PB09 on SAMD)
+#define OPENEVSE_CABLE_TEMP_PIN_PP2  2 // PP2_READ (ADC3 on 328P / PA04 on SAMD)
+
+// Per-source reading status reported by getCableTemperatures(). The
+// temperature argument is meaningful only for _OK; it is 0 otherwise.
+#define OPENEVSE_CABLE_TEMP_STATUS_OK            0
+#define OPENEVSE_CABLE_TEMP_STATUS_NOT_INSTALLED 1 // source unassigned, or the feature is disabled
+#define OPENEVSE_CABLE_TEMP_STATUS_OPEN          2 // no cable plugged in, or an open/broken thermistor
+#define OPENEVSE_CABLE_TEMP_STATUS_SHORTED       3 // shorted thermistor or wiring
+
+// Raw sentinel values the controller sends in place of a temperature, in
+// 10ths of a degree C. Exposed for callers decoding a raw $GN themselves;
+// getCableTemperatures() translates these into the status codes above.
+#define OPENEVSE_CABLE_TEMP_RAW_NOT_INSTALLED -2560
+#define OPENEVSE_CABLE_TEMP_RAW_OPEN          -2561
+#define OPENEVSE_CABLE_TEMP_RAW_SHORTED       -2562
+
 #define OPENEVSE_LCD_OFF      0
 #define OPENEVSE_LCD_RED      1
 #define OPENEVSE_LCD_GREEN    2
@@ -116,6 +151,7 @@
 #define OPENEVSE_LCD_WHITE    7
 
 #define OPENEVSE_FEATURE_BUTTON             'B' // disable/enable front panel button
+#define OPENEVSE_FEATURE_CABLE_TEMPERATURE  'C' // cable NTC thermistor monitoring (linco-work D9, firmware 9.4.0+)
 #define OPENEVSE_FEATURE_DIODE_CKECK        'D' // Diode check
 #define OPENEVSE_FEATURE_ECHO               'E' // command Echo
 #define OPENEVSE_FEATURE_GFI_SELF_TEST      'F' // GFI self test
@@ -193,6 +229,49 @@ class OpenEVSEClass
     // report whether the relay came free; check getStatus()/getRelayHealth()
     // afterward.
     void runStuckRelayRecovery(std::function<void(int ret)> callback);
+
+    // Cable NTC thermistor monitoring (firmware 9.4.0+, requires the
+    // controller's CABLE_TEMPERATURE_MONITORING feature). Enable/disable the
+    // whole feature through feature(OPENEVSE_FEATURE_CABLE_TEMPERATURE, ...).
+    //
+    // Temperatures are in degrees C and are meaningful only where the
+    // matching status is OPENEVSE_CABLE_TEMP_STATUS_OK - an unassigned
+    // source, an unplugged cable and a shorted sensor each report 0 with
+    // their own status instead. Note that a cable simply not being plugged in
+    // reads as _OPEN during entirely normal operation, so _OPEN on its own is
+    // not an error condition.
+    void getCableTemperatures(std::function<void(int ret,
+        double ev1, uint8_t ev1_status,
+        double ev2, uint8_t ev2_status,
+        double in1, uint8_t in1_status,
+        double in2, uint8_t in2_status)> callback);
+
+    // Read one source's configuration. offset_c10 and panic_c10 are in 10ths
+    // of a degree C, matching the controller - 0.1 C granularity is the point
+    // of the calibration offset, so these are deliberately not degrees.
+    void getCableTemperatureConfig(uint8_t source, std::function<void(int ret,
+        uint8_t pin, uint32_t r25, uint32_t beta,
+        int32_t offset_c10, int32_t panic_c10)> callback);
+
+    // Set one source's full configuration.
+    //  source:     OPENEVSE_CABLE_TEMP_SOURCE_xxx
+    //  pin:        OPENEVSE_CABLE_TEMP_PIN_xxx
+    //  r25:        NTC nominal resistance at 25 C, ohms (100-65535)
+    //  beta:       NTC beta coefficient (1000-6000)
+    //  offset_c10: calibration offset, 10ths of a degree C (-2000..2000)
+    //  panic_c10:  shutdown threshold, 10ths of a degree C (300-1500)
+    // Defaults on the controller suit the Phoenix Contact NACS cable:
+    // r25=10000, beta=3443, offset=0, panic=900 (90.0 C). Numeric ranges are
+    // enforced by the controller, which NAKs anything outside them; only
+    // source and pin are checked here, since those would otherwise silently
+    // configure the wrong source. Saved to the controller's EEPROM.
+    void setCableTemperatureConfig(uint8_t source, uint8_t pin,
+        uint32_t r25, uint32_t beta, int32_t offset_c10, int32_t panic_c10,
+        std::function<void(int ret)> callback);
+
+    // Reassign a source's input pin, leaving its calibration alone. Pass
+    // OPENEVSE_CABLE_TEMP_PIN_NONE to disable the source. Saved to EEPROM.
+    void setCableTemperaturePin(uint8_t source, uint8_t pin, std::function<void(int ret)> callback);
 
     void setServiceLevel(uint8_t level, std::function<void(int ret)> callback);
 
