@@ -1311,6 +1311,31 @@ void OpenEVSEClass::lcdEnable(bool enable, std::function<void(int ret)> callback
   });
 }
 
+void OpenEVSEClass::setLcdType(uint8_t type, std::function<void(int ret)> callback)
+{
+  if (!_sender) {
+    callback(RAPI_RESPONSE_NOT_CONNECTED);
+    return;
+  }
+
+  // S0 0|1 - set LCD type
+  //  $S0 0*F7 = monochrome backlight
+  //  $S0 1*F8 = RGB backlight
+
+  if(OPENEVSE_LCD_TYPE_MONO != type && OPENEVSE_LCD_TYPE_RGB != type)
+  {
+    callback(RAPI_RESPONSE_INVALID_RESPONSE);
+    return;
+  }
+
+  char command[8];
+  snprintf(command, sizeof(command), "$S0 %d", type);
+
+  _sender->sendCmd(command, [this, callback](int ret) {
+    callback(ret);
+  });
+}
+
 void OpenEVSEClass::lcdSetColour(int colour, std::function<void(int ret)> callback)
 {
   if (!_sender) {

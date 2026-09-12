@@ -166,6 +166,9 @@
 #define OPENEVSE_SERVICE_LEVEL_L1           '1'
 #define OPENEVSE_SERVICE_LEVEL_L2           '2'
 
+#define OPENEVSE_LCD_TYPE_MONO              0 // monochrome LCD backlight
+#define OPENEVSE_LCD_TYPE_RGB               1 // RGB LCD backlight (e.g. JuiceBox v2 replacement)
+
 typedef std::function<void(uint8_t post_code, const char *firmware)> OpenEVSEBootCallback;
 typedef std::function<void(uint8_t evse_state, uint8_t pilot_state, uint32_t current_capacity, uint32_t vflags)> OpenEVSEStateCallback;
 typedef std::function<void(uint8_t event)> OpenEVSEWiFiCallback;
@@ -306,6 +309,7 @@ class OpenEVSEClass
     void lcdEnable(bool enable, std::function<void(int ret)> callback);
     void lcdSetColour(int colour, std::function<void(int ret)> callback);
     void lcdDisplayText(int x, int y, const char *text, std::function<void(int ret)> callback);
+    void setLcdType(uint8_t type, std::function<void(int ret)> callback); // OPENEVSE_LCD_TYPE_MONO / OPENEVSE_LCD_TYPE_RGB
 
     void feature(uint8_t feature, bool enable, std::function<void(int ret)> callback);
 
