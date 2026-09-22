@@ -26,6 +26,18 @@
 #define RAPI_MAX_COMMANDS 10
 #endif
 
+// Ceiling on a single flush(). A full queue of commands that a controller
+// never answers takes RAPI_MAX_COMMANDS * RAPI_TIMEOUT_MS to drain -- 5 s at
+// the defaults, which is exactly the arduino-esp32 task watchdog period -- and
+// completion handlers may queue more work as they run, so the drain has no
+// upper bound at all. flush() runs on the caller's task, which on the ESP32
+// gateway is the Arduino loop task, sometimes inside a web request handler.
+// Bound it well clear of the watchdog and let whatever is left drain from the
+// caller's normal loop() instead.
+#ifndef RAPI_FLUSH_TIMEOUT_MS
+#define RAPI_FLUSH_TIMEOUT_MS 2000
+#endif
+
 // Longest queued command, including the terminator. The library's own commands
 // are built in stack buffers of at most 64 bytes; the only unbounded source is
 // a command relayed from a web/MQTT client, which is rejected with
@@ -253,6 +265,10 @@ public:
   bool hasPendingCommands() {
     return !_commandQueue.empty();
   }
-  void flush();
+  // Drains queued commands and the one in flight, running their completion
+  // handlers. Returns true if everything drained, false if `timeout` ms passed
+  // first -- in which case the remainder is still queued and still completes
+  // normally from loop(); only the synchronous wait is abandoned.
+  bool flush(unsigned long timeout = RAPI_FLUSH_TIMEOUT_MS);
 };
 
