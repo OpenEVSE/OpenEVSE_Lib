@@ -369,13 +369,20 @@ RapiSender::loop()
   }
 }
 
-void RapiSender::flush()
+bool RapiSender::flush(unsigned long timeout)
 {
   DBUGLN("RapiSender::flush()");
+  unsigned long start = millis();
   while(hasPendingCommands() || _waitingForReply)
   {
     DBUGVAR(hasPendingCommands());
     DBUGVAR(_waitingForReply);
+    // Subtract before comparing so the wait survives the millis() rollover.
+    if(millis() - start >= timeout) {
+      DBUGLN("RapiSender::flush() gave up");
+      return false;
+    }
     loop();
   }
+  return true;
 }
