@@ -256,7 +256,9 @@ public:
   // Traffic hooks, for activity indicators. onSend runs as each command is
   // written to the stream; onReceive runs for every complete frame read back,
   // command replies and asynchronous events alike. Both run inline on the
-  // RAPI path, so keep them short and do not send from them.
+  // RAPI path, mid-frame, so keep them short and do not call back into the
+  // sender: no sendCmd() and no loop(), which would overwrite the frame being
+  // read.
   void setOnSend(RapiEventHandler callback) {
     _onSend = callback;
   }
