@@ -204,6 +204,8 @@ private:
   int _tokenCnt;
   const char *_tokens[RAPI_MAX_TOKENS];
   RapiEventHandler _onRapiEvent;
+  RapiEventHandler _onSend;
+  RapiEventHandler _onReceive;
 
   Queue<CommandItem> _commandQueue;
   RapiCommandCompleteHandler _completeHandler;
@@ -249,6 +251,19 @@ public:
   }
   void setOnEvent(RapiEventHandler callback) {
     _onRapiEvent = callback;
+  }
+
+  // Traffic hooks, for activity indicators. onSend runs as each command is
+  // written to the stream; onReceive runs for every complete frame read back,
+  // command replies and asynchronous events alike. Both run inline on the
+  // RAPI path, mid-frame, so keep them short and do not call back into the
+  // sender: no sendCmd() and no loop(), which would overwrite the frame being
+  // read.
+  void setOnSend(RapiEventHandler callback) {
+    _onSend = callback;
+  }
+  void setOnReceive(RapiEventHandler callback) {
+    _onReceive = callback;
   }
 
   uint32_t getSent() {
