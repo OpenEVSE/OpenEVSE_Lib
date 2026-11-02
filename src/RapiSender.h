@@ -77,6 +77,19 @@
 #define RAPI_RESPONSE_BAD_SEQUENCE_ID         5
 #define RAPI_RESPONSE_ASYNC_EVENT             6
 #define RAPI_RESPONSE_FEATURE_NOT_SUPPORTED   7
+#define RAPI_RESPONSE_CANCELLED               8 // dropped from the queue unsent (see holdSend())
+
+// Priority commands (see setPriority()) are retried this many extra times on a
+// timeout, bad checksum or invalid reply.
+#ifndef RAPI_PRIORITY_RETRIES
+#define RAPI_PRIORITY_RETRIES 2
+#endif
+
+// While sending is held (see holdSend()), at most this many ordinary commands
+// may wait in the queue; the rest of it is kept free for priority commands.
+#ifndef RAPI_HOLD_MAX_QUEUED
+#define RAPI_HOLD_MAX_QUEUED 3
+#endif
 
 // _flags
 #define RSF_SEQUENCE_ID_ENABLED   0x01
@@ -195,6 +208,8 @@ struct CommandItem {
   char command[RAPI_CMD_BUFLEN];
   RapiCommandCompleteHandler handler;
   unsigned int timeout;
+  bool priority;
+  uint8_t retries;
 };
 
 class RapiSender {
@@ -215,6 +230,9 @@ private:
   bool _waitingForReply;
   unsigned long _holdUntil;
   bool _holding;
+  bool _priority;
+  // the command in flight, kept so a priority command can be re-sent
+  CommandItem _inFlight;
 
   char _respBuf[RAPI_BUFLEN];
   char _respBufOrig[RAPI_BUFLEN];
@@ -226,6 +244,7 @@ private:
   int _waitForResult(unsigned long timeout);
   void _commandComplete(int result);
   bool _sendHeld();
+  bool _retryInFlight(int result);
   uint8_t _sequenceIdEnabled() {
     return (_flags & RSF_SEQUENCE_ID_ENABLED) ? 1 : 0;
   }
@@ -239,7 +258,17 @@ public:
   // Send nothing to the controller for the next ms milliseconds (e.g. right
   // after it reports a restart). Commands are queued, not dropped, and are
   // sent in order once the hold expires. Calling again restarts the hold.
+  // While held, ordinary commands beyond RAPI_HOLD_MAX_QUEUED are refused with
+  // RAPI_RESPONSE_QUEUE_FULL. Re-arming the hold cancels (RAPI_RESPONSE_CANCELLED)
+  // priority commands still queued from before, and stops the one in flight
+  // from being retried: they belong to the previous controller session.
   void holdSend(unsigned long ms);
+
+  // Commands queued while priority is on may use the whole queue, even during
+  // a hold, and are retried up to RAPI_PRIORITY_RETRIES times. Applies to
+  // sendCmd() calls made directly between setPriority(true) and
+  // setPriority(false), not to ones made later from their callbacks.
+  void setPriority(bool on) { _priority = on; }
   void setStream(Stream *stream) { _stream = stream; }
   //  void sendString(const char *str) { dbgprint(str); }
 

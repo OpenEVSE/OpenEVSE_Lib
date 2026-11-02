@@ -58,6 +58,8 @@ RapiSender::RapiSender(Stream * stream) :
   _waitingForReply(false),
   _holdUntil(0),
   _holding(false),
+  _priority(false),
+  _inFlight(),
   _respBuf{},
   _respBufOrig{}
 {
@@ -103,6 +105,64 @@ void RapiSender::holdSend(unsigned long ms)
 {
   _holdUntil = millis() + ms;
   _holding = true;
+
+  // Drop priority commands left over from before this hold (e.g. boot reads
+  // for a controller that has just restarted again); the caller re-issues
+  // them. Ordinary commands keep their place. Handlers run after the queue is
+  // rebuilt, so one that queues a new command cannot disturb the scan.
+  _inFlight.retries = 0;
+  RapiCommandCompleteHandler cancelled[RAPI_MAX_COMMANDS];
+  size_t nCancelled = 0;
+  size_t n = _commandQueue.used();
+  for(size_t i = 0; i < n; i++) {
+    CommandItem cmd;
+    if(!_commandQueue.pop(cmd)) {
+      break;
+    }
+    if(cmd.priority) {
+      cancelled[nCancelled++] = cmd.handler;
+    } else {
+      _commandQueue.push(cmd);
+    }
+  }
+  for(size_t i = 0; i < nCancelled; i++) {
+    if(nullptr != cancelled[i]) {
+      cancelled[i](RAPI_RESPONSE_CANCELLED);
+    }
+  }
+}
+
+bool RapiSender::_retryInFlight(int result)
+{
+  if(!_inFlight.priority ||
+     !(RAPI_RESPONSE_TIMEOUT == result || RAPI_RESPONSE_BAD_CHECKSUM == result ||
+       RAPI_RESPONSE_INVALID_RESPONSE == result)) {
+    return false;
+  }
+  if(0 == _inFlight.retries) {
+    DBUGF("RAPI: giving up on %s (%d)", _inFlight.command, result);
+    return false;
+  }
+  _inFlight.retries--;
+  DBUGF("RAPI: retrying %s (%d)", _inFlight.command, result);
+  if(_sendHeld()) {
+    // Requeue (behind what is already waiting) rather than send into a hold.
+    CommandItem retry = _inFlight;
+    retry.handler = _completeHandler;
+    if(!_commandQueue.push(retry)) {
+      return false;
+    }
+    _inFlight = CommandItem();
+    _completeHandler = nullptr;
+    _waitingForReply = false;
+    return true;
+  }
+  // Re-send now, keeping its place ahead of the queue. It gets a fresh
+  // sequence id and a fresh timeout, so a late reply to the earlier attempt
+  // is dropped as stale.
+  _sendCmd(_inFlight.command);
+  _timeout = millis() + _inFlight.timeout;
+  return true;
 }
 
 bool RapiSender::_sendHeld()
@@ -127,6 +187,8 @@ void RapiSender::_sendNextCmd()
   {
     _sendCmd(cmd.command);
     _completeHandler = cmd.handler;
+    _inFlight = cmd;
+    _inFlight.handler = nullptr; // _completeHandler owns it
     _timeout = millis() + cmd.timeout;
     _waitingForReply = true;
   }
@@ -291,7 +353,14 @@ void RapiSender::_commandComplete(int result)
   // its operator() is still on the stack. No caller does this today; fixing it
   // properly means deciding whether a nested synchronous send should be
   // allowed at all, which is a bigger change than this branch should make.
+  if(_waitingForReply && _retryInFlight(result)) {
+    if(!_waitingForReply) {
+      _sendNextCmd(); // requeued: nothing in flight now
+    }
+    return;
+  }
   if(_waitingForReply) {
+    _inFlight = CommandItem();
     if(nullptr != _completeHandler) {
       _completeHandler(result);
     }
@@ -330,8 +399,13 @@ RapiSender::sendCmd(const char *cmdstr, RapiCommandCompleteHandler callback, uns
   strcpy(cmd.command, cmdstr);
   cmd.handler = callback;
   cmd.timeout = timeout;
+  cmd.priority = _priority;
+  cmd.retries = _priority ? RAPI_PRIORITY_RETRIES : 0;
 
-  if(_commandQueue.push(cmd)) {
+  // During a hold keep most of the queue free for priority commands.
+  bool capped = !_priority && _sendHeld() &&
+                _commandQueue.used() >= RAPI_HOLD_MAX_QUEUED;
+  if(!capped && _commandQueue.push(cmd)) {
     if(!_waitingForReply) {
       _sendNextCmd();
     }
