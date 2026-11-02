@@ -363,7 +363,11 @@ RapiSender::loop()
   if(_stream->available())
   {
     int ret = _waitForResult(RAPI_READ_TIMEOUT_MS);
-    if(RAPI_RESPONSE_ASYNC_EVENT == ret) {
+    if(RAPI_RESPONSE_BAD_SEQUENCE_ID == ret) {
+      // a stale reply to an earlier (timed-out) command. Drop it
+      // and keep waiting for the reply to the current one (or its timeout).
+      DBUGLN("RAPI: dropped reply with wrong sequence id");
+    } else if(RAPI_RESPONSE_ASYNC_EVENT == ret) {
       // async EVSE state transition or WiFi event
       if(nullptr != _onRapiEvent) {
         _onRapiEvent();
