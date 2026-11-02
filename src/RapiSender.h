@@ -216,7 +216,7 @@ private:
   int _tokenize();
   void _sendNextCmd();
   void _sendCmd(const char *cmdstr);
-  void _sendTail(uint8_t chk);
+  void _sendTail(uint8_t chk, bool addSeq = true);
   int _waitForResult(unsigned long timeout);
   void _commandComplete(int result);
   uint8_t _sequenceIdEnabled() {

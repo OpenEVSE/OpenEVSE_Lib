@@ -77,22 +77,37 @@ void RapiSender::_sendNextCmd()
 //        = 1 = command will cause buffer overflow
 void
 RapiSender::_sendCmd(const char *cmdstr) {
-  _stream->print(cmdstr);
+  // a caller's own "^HH" checksum (e.g. a /r client) is dropped;
+  // our checksum below covers the whole line, including any sequence id.
+  const char *caret = strchr(cmdstr, '^');
+  size_t len = caret ? (size_t)(caret - cmdstr) : strlen(cmdstr);
+  _stream->write((const uint8_t *)cmdstr, len);
   dbgprint(cmdstr);
 
-  const char *s = cmdstr;
   uint8_t chk = 0;
-  while (*s) {
-    chk ^= *(s++);
+  for (size_t i = 0; i < len; i++) {
+    chk ^= cmdstr[i];
   }
 
-  _sendTail(chk);
+  // if the caller already put its own sequence id on the end
+  // (" :HH", e.g. a /r pass-through client), use it as-is instead of adding a
+  // second one, and expect that id in the reply.
+  bool addSeq = true;
+  if (_sequenceIdEnabled() && len >= 4 &&
+      cmdstr[len-4] == ' ' && cmdstr[len-3] == ESRAPI_SOS &&
+      isxdigit((unsigned char)cmdstr[len-2]) && isxdigit((unsigned char)cmdstr[len-1])) {
+    char hex[3] = { (char)toupper((unsigned char)cmdstr[len-2]), (char)toupper((unsigned char)cmdstr[len-1]), 0 };
+    _sequenceId = htou8(hex);
+    addSeq = false;
+  }
+
+  _sendTail(chk, addSeq);
 
   _sent++;
 }
 
-void RapiSender::_sendTail(uint8_t chk) {
-  if (_sequenceIdEnabled()) {
+void RapiSender::_sendTail(uint8_t chk, bool addSeq) {
+  if (_sequenceIdEnabled() && addSeq) {
     if (++_sequenceId == RAPI_INVALID_SEQUENCE_ID)
       ++_sequenceId;
     sprintf(_respBuf, " %c%02X", ESRAPI_SOS, (unsigned) _sequenceId);
