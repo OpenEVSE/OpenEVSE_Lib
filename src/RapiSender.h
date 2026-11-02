@@ -213,6 +213,8 @@ private:
   RapiCommandCompleteHandler _completeHandler;
   uint32_t _timeout;
   bool _waitingForReply;
+  unsigned long _holdUntil;
+  bool _holding;
 
   char _respBuf[RAPI_BUFLEN];
   char _respBufOrig[RAPI_BUFLEN];
@@ -223,12 +225,21 @@ private:
   void _sendTail(uint8_t chk, bool addSeq = true);
   int _waitForResult(unsigned long timeout);
   void _commandComplete(int result);
+  bool _sendHeld();
   uint8_t _sequenceIdEnabled() {
     return (_flags & RSF_SEQUENCE_ID_ENABLED) ? 1 : 0;
   }
 public:
 
   RapiSender(Stream *stream);
+
+  // Strictly parse a RAPI/firmware version token ("N.N.N", 1-3 digits each).
+  static bool parseVersion(const char *s, int &major, int &minor, int &patch);
+
+  // Send nothing to the controller for the next ms milliseconds (e.g. right
+  // after it reports a restart). Commands are queued, not dropped, and are
+  // sent in order once the hold expires. Calling again restarts the hold.
+  void holdSend(unsigned long ms);
   void setStream(Stream *stream) { _stream = stream; }
   //  void sendString(const char *str) { dbgprint(str); }
 

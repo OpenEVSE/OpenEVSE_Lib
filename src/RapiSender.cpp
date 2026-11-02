@@ -56,13 +56,72 @@ RapiSender::RapiSender(Stream * stream) :
   _completeHandler(nullptr),
   _timeout(0),
   _waitingForReply(false),
+  _holdUntil(0),
+  _holding(false),
   _respBuf{},
   _respBufOrig{}
 {
 }
 
+// Strict "N.N.N" parse: exactly three dot-separated groups of 1-3 decimal
+// digits and nothing else, so "2junk", "", "2.0", "2.0.3x" or an overlong
+// number are rejected instead of being read as a partial version.
+bool RapiSender::parseVersion(const char *s, int &major, int &minor, int &patch)
+{
+  int part[3];
+  if(nullptr == s) {
+    return false;
+  }
+  for(int i = 0; i < 3; i++) {
+    int digits = 0, val = 0;
+    while(isdigit((unsigned char)*s)) {
+      if(++digits > 3) {
+        return false;
+      }
+      val = val * 10 + (*s++ - '0');
+    }
+    if(0 == digits) {
+      return false;
+    }
+    part[i] = val;
+    if(i < 2) {
+      if('.' != *s++) {
+        return false;
+      }
+    }
+  }
+  if('\0' != *s) {
+    return false;
+  }
+  major = part[0];
+  minor = part[1];
+  patch = part[2];
+  return true;
+}
+
+void RapiSender::holdSend(unsigned long ms)
+{
+  _holdUntil = millis() + ms;
+  _holding = true;
+}
+
+bool RapiSender::_sendHeld()
+{
+  // Signed difference so the hold survives the millis() rollover.
+  if(_holding && (long)(millis() - _holdUntil) < 0) {
+    return true;
+  }
+  _holding = false;
+  return false;
+}
+
 void RapiSender::_sendNextCmd()
 {
+  if(_sendHeld()) {
+    // Commands stay queued; loop() sends them once the hold expires. Their
+    // timeouts start when they are actually sent.
+    return;
+  }
   CommandItem cmd;
   if(_commandQueue.pop(cmd))
   {
@@ -183,11 +242,12 @@ RapiSender::_tokenize() {
     (!strcmp(_tokens[0], "$OK") || !strcmp(_tokens[0], "$NK"));
   bool hasSeq = _tokenCnt > 1 && _tokens[_tokenCnt-1][0] == ESRAPI_SOS;
   if (_sequenceIdEnabled() && isReply && !hasSeq) {
+    int major, minor, patch;
     // "$OK <fw version> <RAPI version>": only trust a missing id if the
     // reply itself says the controller predates ids (RAPI < 3.0).
     if (!(_flags & RSF_SEQUENCE_ID_SEEN) && (_flags & RSF_CMD_IS_VERSION) &&
         !strcmp(_tokens[0], "$OK") && _tokenCnt >= 3 &&
-        isdigit((unsigned char)_tokens[2][0]) && atoi(_tokens[2]) < 3) {
+        parseVersion(_tokens[2], major, minor, patch) && major < 3) {
       // No id on the reply to the initial version query from a controller
       // that does not support ids. Turn id checking off for this session
       // and accept the reply.
@@ -448,6 +508,10 @@ RapiSender::loop()
   else if (_waitingForReply && millis() >= _timeout)
   {
     _commandComplete(RAPI_RESPONSE_TIMEOUT);
+  }
+  // Release commands queued while sending was held (see holdSend()).
+  if(!_waitingForReply && hasPendingCommands()) {
+    _sendNextCmd();
   }
 }
 

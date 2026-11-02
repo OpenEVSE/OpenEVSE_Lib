@@ -54,7 +54,7 @@ void OpenEVSEClass::_beginGetVersion(std::function<void(bool connected, const ch
     }
     if (RAPI_RESPONSE_OK == ret) {
       int major, minor, patch;
-      if(3 == sscanf(protocol, "%d.%d.%d", &major, &minor, &patch))
+      if(RapiSender::parseVersion(protocol, major, minor, patch))
       {
         _protocol = OPENEVSE_ENCODE_VERSION(major, minor, patch);
         DBUGVAR(_protocol);
