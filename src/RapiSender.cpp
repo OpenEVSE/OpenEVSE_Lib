@@ -58,6 +58,7 @@ RapiSender::RapiSender(Stream * stream) :
   _waitingForReply(false),
   _holdUntil(0),
   _holding(false),
+  _holdMaxQueued(RAPI_HOLD_MAX_QUEUED),
   _priority(false),
   _inFlight(),
   _respBuf{},
@@ -65,46 +66,11 @@ RapiSender::RapiSender(Stream * stream) :
 {
 }
 
-// Strict "N.N.N" parse: exactly three dot-separated groups of 1-3 decimal
-// digits and nothing else, so "2junk", "", "2.0", "2.0.3x" or an overlong
-// number are rejected instead of being read as a partial version.
-bool RapiSender::parseVersion(const char *s, int &major, int &minor, int &patch)
-{
-  int part[3];
-  if(nullptr == s) {
-    return false;
-  }
-  for(int i = 0; i < 3; i++) {
-    int digits = 0, val = 0;
-    while(isdigit((unsigned char)*s)) {
-      if(++digits > 3) {
-        return false;
-      }
-      val = val * 10 + (*s++ - '0');
-    }
-    if(0 == digits) {
-      return false;
-    }
-    part[i] = val;
-    if(i < 2) {
-      if('.' != *s++) {
-        return false;
-      }
-    }
-  }
-  if('\0' != *s) {
-    return false;
-  }
-  major = part[0];
-  minor = part[1];
-  patch = part[2];
-  return true;
-}
-
-void RapiSender::holdSend(unsigned long ms)
+void RapiSender::holdSend(unsigned long ms, size_t maxQueued)
 {
   _holdUntil = millis() + ms;
   _holding = true;
+  _holdMaxQueued = maxQueued > queueCapacity() ? queueCapacity() : maxQueued;
 
   // Drop priority commands left over from before this hold (e.g. boot reads
   // for a controller that has just restarted again); the caller re-issues
@@ -404,7 +370,7 @@ RapiSender::sendCmd(const char *cmdstr, RapiCommandCompleteHandler callback, uns
 
   // During a hold keep most of the queue free for priority commands.
   bool capped = !_priority && _sendHeld() &&
-                _commandQueue.used() >= RAPI_HOLD_MAX_QUEUED;
+                _commandQueue.used() >= _holdMaxQueued;
   if(!capped && _commandQueue.push(cmd)) {
     if(!_waitingForReply) {
       _sendNextCmd();
@@ -545,7 +511,10 @@ RapiSender::enableSequenceId(uint8_t tf) {
   if (tf) {
     // Random start, so a reply left over from before a restart is unlikely
     // to carry the id of our first commands.
-#if defined(ESP32)
+#if defined(EPOXY_DUINO) || defined(UNIX_HOST_DUINO)
+    // host builds (simulator/tests) may define ESP32/ESP8266 without the SDK
+    _sequenceId = (uint8_t) (micros() ^ (millis() >> 3));
+#elif defined(ESP32)
     _sequenceId = (uint8_t) esp_random();
 #elif defined(ESP8266)
     _sequenceId = (uint8_t) RANDOM_REG32;
