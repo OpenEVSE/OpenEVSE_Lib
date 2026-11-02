@@ -5,6 +5,8 @@
 #include <Arduino.h>
 #include "RapiSender.h"
 #include "MicroDebug.h"
+#include <ctype.h>
+#include <string.h>
 
 #define dbgprint(s) DBUG(s)
 #define dbgprintln(s) DBUGLN(s)
@@ -143,23 +145,30 @@ RapiSender::_tokenize() {
     if (_tokenCnt == RAPI_MAX_TOKENS)
       break;
 
-    while (*s && (*s != ' ') && (*s != ESRAPI_SOS)) {
+    while (*s && (*s != ' ')) {
       s++;
     }
     if (*s == ' ') {
       *(s++) = '\0';
-    } else if (*s == ESRAPI_SOS) {
-      *(s++) = '\0';
-      uint8_t seqid = htou8(s + 1);
-      if (seqid != _sequenceId) {
+    }
+  }
+
+  // the controller sends the sequence id as its own last token
+  // (" :HH", open_evse rapi_proc.cpp appendSequenceId). Strip it, and for
+  // command replies ($OK/$NK) reject it if it isn't the id we just sent.
+  // Async events ($ST/$AT/...) and controller-initiated commands ($WF...) are
+  // not replies to us, so their id (if any) is just dropped.
+  if (_tokenCnt > 1 && _tokens[_tokenCnt-1][0] == ESRAPI_SOS) {
+    uint8_t seqid = htou8(_tokens[_tokenCnt-1] + 1);
+    _tokenCnt--;
+    bool isReply = !strcmp(_tokens[0], "$OK") || !strcmp(_tokens[0], "$NK");
+    if (_sequenceIdEnabled() && isReply && seqid != _sequenceId) {
 #ifdef DBG
-        sprintf(_respBuf, "bad seqid %x %x %s", seqid, _sequenceId, s);
-        dbgprintln(_respBuf);
+      dbgprint("bad seqid ");
+      dbgprintln(seqid);
 #endif
-        _tokenCnt = 0;
-        return RAPI_RESPONSE_BAD_SEQUENCE_ID;
-      }
-      break;                    // sequence id is last - break out
+      _tokenCnt = 0;
+      return RAPI_RESPONSE_BAD_SEQUENCE_ID;
     }
   }
 
