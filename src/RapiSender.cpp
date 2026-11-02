@@ -176,9 +176,12 @@ RapiSender::_tokenize() {
   bool isReply = _tokenCnt > 0 &&
     (!strcmp(_tokens[0], "$OK") || !strcmp(_tokens[0], "$NK"));
   bool hasSeq = _tokenCnt > 1 && _tokens[_tokenCnt-1][0] == ESRAPI_SOS;
-  if (_sequenceIdEnabled() && isReply && !hasSeq) {
-    // The controller echoes the id on every reply to a command that carried
-    // one, so a reply without an id cannot be matched to this command.
+  if (_sequenceIdEnabled() && isReply && !hasSeq &&
+      (_flags & RSF_SEQUENCE_ID_SEEN)) {
+    // A controller that supports ids echoes the id on every reply to a
+    // command that carried one, so once it has done so, a reply without an
+    // id cannot be matched to this command. Controllers that never echo an id
+    // (RAPI < 3.0) keep working as before.
 #ifdef DBG
     dbgprintln("missing seqid");
 #endif
@@ -195,6 +198,9 @@ RapiSender::_tokenize() {
 #endif
       _tokenCnt = 0;
       return RAPI_RESPONSE_BAD_SEQUENCE_ID;
+    }
+    if (isReply) {
+      _flags |= RSF_SEQUENCE_ID_SEEN;
     }
   }
 
@@ -231,6 +237,19 @@ RapiSender::sendCmd(const char *cmdstr, RapiCommandCompleteHandler callback, uns
       callback(RAPI_RESPONSE_CMD_TOO_LONG);
     }
     return;
+  }
+
+  // Id 00 is reserved as "no id": the controller would run the command but
+  // reply without an id. Refuse a caller-supplied " :00" before sending it.
+  if(_sequenceIdEnabled()) {
+    const char *caret = strchr(cmdstr, '^');
+    size_t len = caret ? (size_t)(caret - cmdstr) : strlen(cmdstr);
+    if(len >= 4 && !strncmp(cmdstr + len - 4, " :00", 4)) {
+      if(nullptr != callback) {
+        callback(RAPI_RESPONSE_BAD_SEQUENCE_ID);
+      }
+      return;
+    }
   }
 
   strcpy(cmd.command, cmdstr);
@@ -379,7 +398,7 @@ RapiSender::enableSequenceId(uint8_t tf) {
     _flags |= RSF_SEQUENCE_ID_ENABLED;
   } else {
     _sequenceId = RAPI_INVALID_SEQUENCE_ID;
-    _flags &= ~RSF_SEQUENCE_ID_ENABLED;
+    _flags &= ~(RSF_SEQUENCE_ID_ENABLED | RSF_SEQUENCE_ID_SEEN);
   }
 }
 

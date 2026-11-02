@@ -80,6 +80,7 @@
 
 // _flags
 #define RSF_SEQUENCE_ID_ENABLED   0x01
+#define RSF_SEQUENCE_ID_SEEN      0x02 // controller has echoed an id
 
 typedef std::function<void()> RapiEventHandler;
 
