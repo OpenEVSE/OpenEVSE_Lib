@@ -37,7 +37,7 @@ void OpenEVSEClass::begin(RapiSender &sender, std::function<void(bool connected,
   _sender = &sender;
 
   _sender->setOnEvent([this]() { onEvent(); });
-  _sender->enableSequenceId(0);
+  _sender->enableSequenceId(1); // match replies to requests by RAPI sequence id
 
   getVersion([this, callback](int ret, const char *firmware, const char *protocol) {
     if (RAPI_RESPONSE_OK == ret) {
