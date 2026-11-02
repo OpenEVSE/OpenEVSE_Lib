@@ -81,6 +81,7 @@
 // _flags
 #define RSF_SEQUENCE_ID_ENABLED   0x01
 #define RSF_SEQUENCE_ID_SEEN      0x02 // controller has echoed an id
+#define RSF_CMD_IS_VERSION        0x04 // command in flight is $GV
 
 typedef std::function<void()> RapiEventHandler;
 

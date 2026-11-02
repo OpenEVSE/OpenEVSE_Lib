@@ -89,6 +89,12 @@ RapiSender::_sendCmd(const char *cmdstr) {
     chk ^= cmdstr[i];
   }
 
+  // remember whether this is the version query (see _tokenize)
+  if (len >= 3 && !strncmp(cmdstr, "$GV", 3) && (len == 3 || cmdstr[3] == ' '))
+    _flags |= RSF_CMD_IS_VERSION;
+  else
+    _flags &= ~RSF_CMD_IS_VERSION;
+
   // if the caller already put its own sequence id on the end
   // (" :HH", e.g. a /r pass-through client), use it as-is instead of adding a
   // second one, and expect that id in the reply.
@@ -176,17 +182,20 @@ RapiSender::_tokenize() {
   bool isReply = _tokenCnt > 0 &&
     (!strcmp(_tokens[0], "$OK") || !strcmp(_tokens[0], "$NK"));
   bool hasSeq = _tokenCnt > 1 && _tokens[_tokenCnt-1][0] == ESRAPI_SOS;
-  if (_sequenceIdEnabled() && isReply && !hasSeq &&
-      (_flags & RSF_SEQUENCE_ID_SEEN)) {
-    // A controller that supports ids echoes the id on every reply to a
-    // command that carried one, so once it has done so, a reply without an
-    // id cannot be matched to this command. Controllers that never echo an id
-    // (RAPI < 3.0) keep working as before.
+  if (_sequenceIdEnabled() && isReply && !hasSeq) {
+    if (!(_flags & RSF_SEQUENCE_ID_SEEN) && (_flags & RSF_CMD_IS_VERSION)) {
+      // No id on the reply to the initial version query: this controller
+      // does not support ids (RAPI < 3.0). Turn id checking off for this
+      // session and accept the reply.
+      enableSequenceId(0);
+    } else {
+      // Any other id-less reply cannot be matched to the command we sent.
 #ifdef DBG
-    dbgprintln("missing seqid");
+      dbgprintln("missing seqid");
 #endif
-    _tokenCnt = 0;
-    return RAPI_RESPONSE_BAD_SEQUENCE_ID;
+      _tokenCnt = 0;
+      return RAPI_RESPONSE_BAD_SEQUENCE_ID;
+    }
   }
   if (hasSeq) {
     uint8_t seqid = htou8(_tokens[_tokenCnt-1] + 1);
@@ -394,7 +403,16 @@ RapiSender::_waitForResult(unsigned long timeout) {
 void
 RapiSender::enableSequenceId(uint8_t tf) {
   if (tf) {
-    _sequenceId = (uint8_t) millis();   // seed with random number
+    // Random start, so a reply left over from before a restart is unlikely
+    // to carry the id of our first commands.
+#if defined(ESP32)
+    _sequenceId = (uint8_t) esp_random();
+#elif defined(ESP8266)
+    _sequenceId = (uint8_t) RANDOM_REG32;
+#else
+    _sequenceId = (uint8_t) (micros() ^ (millis() >> 3));
+#endif
+    if (_sequenceId == RAPI_INVALID_SEQUENCE_ID) _sequenceId = 1;
     _flags |= RSF_SEQUENCE_ID_ENABLED;
   } else {
     _sequenceId = RAPI_INVALID_SEQUENCE_ID;
