@@ -183,13 +183,19 @@ RapiSender::_tokenize() {
     (!strcmp(_tokens[0], "$OK") || !strcmp(_tokens[0], "$NK"));
   bool hasSeq = _tokenCnt > 1 && _tokens[_tokenCnt-1][0] == ESRAPI_SOS;
   if (_sequenceIdEnabled() && isReply && !hasSeq) {
-    if (!(_flags & RSF_SEQUENCE_ID_SEEN) && (_flags & RSF_CMD_IS_VERSION)) {
-      // No id on the reply to the initial version query: this controller
-      // does not support ids (RAPI < 3.0). Turn id checking off for this
-      // session and accept the reply.
+    // "$OK <fw version> <RAPI version>": only trust a missing id if the
+    // reply itself says the controller predates ids (RAPI < 3.0).
+    if (!(_flags & RSF_SEQUENCE_ID_SEEN) && (_flags & RSF_CMD_IS_VERSION) &&
+        !strcmp(_tokens[0], "$OK") && _tokenCnt >= 3 &&
+        isdigit((unsigned char)_tokens[2][0]) && atoi(_tokens[2]) < 3) {
+      // No id on the reply to the initial version query from a controller
+      // that does not support ids. Turn id checking off for this session
+      // and accept the reply.
       enableSequenceId(0);
     } else {
-      // Any other id-less reply cannot be matched to the command we sent.
+      // Any other id-less reply (including a $GV reply reporting RAPI >= 3.0
+      // or an unparseable one) cannot be matched to the command we sent.
+      // Drop it and keep ids on; the caller's timeout/retry re-asks.
 #ifdef DBG
       dbgprintln("missing seqid");
 #endif

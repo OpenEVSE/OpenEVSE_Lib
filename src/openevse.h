@@ -6,6 +6,9 @@
 
 #include "RapiSender.h"
 
+// extra $GV attempts in begin() if no valid reply arrives
+#define OPENEVSE_BEGIN_VERSION_RETRIES 2
+
 #define OPENEVSE_STATE_INVALID               -1
 
 #define OPENEVSE_STATE_STARTING               0
@@ -177,6 +180,7 @@ typedef std::function<void(uint8_t long_press)> OpenEVSEButtonCallback;
 class OpenEVSEClass
 {
   private:
+    void _beginGetVersion(std::function<void(bool connected, const char *firmware, const char *protocol)> callback, int retries);
     RapiSender *_sender;
 
     bool _connected;

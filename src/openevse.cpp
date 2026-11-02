@@ -39,7 +39,19 @@ void OpenEVSEClass::begin(RapiSender &sender, std::function<void(bool connected,
   _sender->setOnEvent([this]() { onEvent(); });
   _sender->enableSequenceId(1); // match replies to requests by RAPI sequence id
 
-  getVersion([this, callback](int ret, const char *firmware, const char *protocol) {
+  _beginGetVersion(callback, OPENEVSE_BEGIN_VERSION_RETRIES);
+}
+
+void OpenEVSEClass::_beginGetVersion(std::function<void(bool connected, const char *firmware, const char *protocol)> callback, int retries)
+{
+  getVersion([this, callback, retries](int ret, const char *firmware, const char *protocol) {
+    if (RAPI_RESPONSE_TIMEOUT == ret && retries > 0) {
+      // e.g. an id-less $GV reply from a RAPI >= 3.0 controller was dropped
+      // by RapiSender; ask again a bounded number of times.
+      DBUGLN("OpenEVSE: no valid $GV reply, retrying");
+      _beginGetVersion(callback, retries - 1);
+      return;
+    }
     if (RAPI_RESPONSE_OK == ret) {
       int major, minor, patch;
       if(3 == sscanf(protocol, "%d.%d.%d", &major, &minor, &patch))
