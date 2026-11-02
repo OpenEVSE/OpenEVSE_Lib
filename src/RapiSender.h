@@ -16,7 +16,9 @@
 #define RAPI_TIMEOUT_MS 500
 #define RAPI_READ_TIMEOUT_MS 20
 #define RAPI_BUFLEN 100
-#define RAPI_MAX_TOKENS 10
+// Longest reply: $OK plus 9 fields ($GL with stuck-relay count), plus the
+// " :HH" sequence id token, plus one spare.
+#define RAPI_MAX_TOKENS 12
 
 #define ESRAPI_SOC '$' // start of command
 #define ESRAPI_EOC 0xd // CR end of command

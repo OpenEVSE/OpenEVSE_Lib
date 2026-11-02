@@ -173,10 +173,21 @@ RapiSender::_tokenize() {
   // command replies ($OK/$NK) reject it if it isn't the id we just sent.
   // Async events ($ST/$AT/...) and controller-initiated commands ($WF...) are
   // not replies to us, so their id (if any) is just dropped.
-  if (_tokenCnt > 1 && _tokens[_tokenCnt-1][0] == ESRAPI_SOS) {
+  bool isReply = _tokenCnt > 0 &&
+    (!strcmp(_tokens[0], "$OK") || !strcmp(_tokens[0], "$NK"));
+  bool hasSeq = _tokenCnt > 1 && _tokens[_tokenCnt-1][0] == ESRAPI_SOS;
+  if (_sequenceIdEnabled() && isReply && !hasSeq) {
+    // The controller echoes the id on every reply to a command that carried
+    // one, so a reply without an id cannot be matched to this command.
+#ifdef DBG
+    dbgprintln("missing seqid");
+#endif
+    _tokenCnt = 0;
+    return RAPI_RESPONSE_BAD_SEQUENCE_ID;
+  }
+  if (hasSeq) {
     uint8_t seqid = htou8(_tokens[_tokenCnt-1] + 1);
     _tokenCnt--;
-    bool isReply = !strcmp(_tokens[0], "$OK") || !strcmp(_tokens[0], "$NK");
     if (_sequenceIdEnabled() && isReply && seqid != _sequenceId) {
 #ifdef DBG
       dbgprint("bad seqid ");
