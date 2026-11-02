@@ -271,18 +271,19 @@ RapiSender::_tokenize() {
   bool hasSeq = _tokenCnt > 1 && _tokens[_tokenCnt-1][0] == ESRAPI_SOS;
   if (_sequenceIdEnabled() && isReply && !hasSeq) {
     int major, minor, patch;
-    // "$OK <fw version> <RAPI version>": only trust a missing id if the
-    // reply itself says the controller predates ids (RAPI < 3.0).
+    // "$OK <fw version> <RAPI version>" with no id, before the controller
+    // has ever echoed one: the controller does not support ids (older
+    // firmware, or an implementation that leaves them out whatever RAPI
+    // version it reports). Only a well-formed version reply counts.
     if (!(_flags & RSF_SEQUENCE_ID_SEEN) && (_flags & RSF_CMD_IS_VERSION) &&
         !strcmp(_tokens[0], "$OK") && _tokenCnt >= 3 &&
-        parseVersion(_tokens[2], major, minor, patch) && major < 3) {
-      // No id on the reply to the initial version query from a controller
-      // that does not support ids. Turn id checking off for this session
-      // and accept the reply.
+        parseVersion(_tokens[2], major, minor, patch)) {
+      // Turn id checking off for this session and accept the reply.
       enableSequenceId(0);
     } else {
-      // Any other id-less reply (including a $GV reply reporting RAPI >= 3.0
-      // or an unparseable one) cannot be matched to the command we sent.
+      // Any other id-less reply (a non-version reply, a malformed version
+      // reply, or any reply once the controller has echoed an id) cannot be
+      // matched to the command we sent.
       // Drop it and keep ids on; the caller's timeout/retry re-asks.
 #ifdef DBG
       dbgprintln("missing seqid");
@@ -522,6 +523,9 @@ RapiSender::enableSequenceId(uint8_t tf) {
     _sequenceId = (uint8_t) (micros() ^ (millis() >> 3));
 #endif
     if (_sequenceId == RAPI_INVALID_SEQUENCE_ID) _sequenceId = 1;
+    // Start a new session: whether this controller echoes ids is not known
+    // until it does again (e.g. it was replaced or reflashed since).
+    _flags &= ~RSF_SEQUENCE_ID_SEEN;
     _flags |= RSF_SEQUENCE_ID_ENABLED;
   } else {
     _sequenceId = RAPI_INVALID_SEQUENCE_ID;

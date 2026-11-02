@@ -46,8 +46,8 @@ void OpenEVSEClass::_beginGetVersion(std::function<void(bool connected, const ch
 {
   getVersion([this, callback, retries](int ret, const char *firmware, const char *protocol) {
     if (RAPI_RESPONSE_TIMEOUT == ret && retries > 0) {
-      // e.g. an id-less $GV reply from a RAPI >= 3.0 controller was dropped
-      // by RapiSender; ask again a bounded number of times.
+      // e.g. the reply was lost or garbled (and dropped by RapiSender);
+      // ask again a bounded number of times.
       DBUGLN("OpenEVSE: no valid $GV reply, retrying");
       _beginGetVersion(callback, retries - 1);
       return;
