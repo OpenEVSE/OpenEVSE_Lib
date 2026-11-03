@@ -16,7 +16,9 @@
 #define RAPI_TIMEOUT_MS 500
 #define RAPI_READ_TIMEOUT_MS 20
 #define RAPI_BUFLEN 100
-#define RAPI_MAX_TOKENS 10
+// Longest reply: $OK plus 9 fields ($GL with stuck-relay count), plus the
+// " :HH" sequence id token, plus one spare.
+#define RAPI_MAX_TOKENS 12
 
 #define ESRAPI_SOC '$' // start of command
 #define ESRAPI_EOC 0xd // CR end of command
@@ -75,9 +77,26 @@
 #define RAPI_RESPONSE_BAD_SEQUENCE_ID         5
 #define RAPI_RESPONSE_ASYNC_EVENT             6
 #define RAPI_RESPONSE_FEATURE_NOT_SUPPORTED   7
+#define RAPI_RESPONSE_CANCELLED               8 // dropped from the queue unsent (see holdSend())
+
+// Priority commands (see setPriority()) are retried this many extra times on a
+// timeout, bad checksum or invalid reply.
+#ifndef RAPI_PRIORITY_RETRIES
+#define RAPI_PRIORITY_RETRIES 2
+#endif
+
+// While sending is held (see holdSend()), at most this many ordinary commands
+// may wait in the queue; the rest of it is kept free for priority commands.
+static_assert(RAPI_MAX_COMMANDS >= 2, "RAPI_MAX_COMMANDS must leave at least one usable queue slot");
+
+#ifndef RAPI_HOLD_MAX_QUEUED
+#define RAPI_HOLD_MAX_QUEUED 3
+#endif
 
 // _flags
 #define RSF_SEQUENCE_ID_ENABLED   0x01
+#define RSF_SEQUENCE_ID_SEEN      0x02 // controller has echoed an id
+#define RSF_CMD_IS_VERSION        0x04 // command in flight is $GV
 
 typedef std::function<void()> RapiEventHandler;
 
@@ -191,6 +210,8 @@ struct CommandItem {
   char command[RAPI_CMD_BUFLEN];
   RapiCommandCompleteHandler handler;
   unsigned int timeout;
+  bool priority;
+  uint8_t retries;
 };
 
 class RapiSender {
@@ -209,6 +230,12 @@ private:
   RapiCommandCompleteHandler _completeHandler;
   uint32_t _timeout;
   bool _waitingForReply;
+  unsigned long _holdUntil;
+  bool _holding;
+  size_t _holdMaxQueued;
+  bool _priority;
+  // the command in flight, kept so a priority command can be re-sent
+  CommandItem _inFlight;
 
   char _respBuf[RAPI_BUFLEN];
   char _respBufOrig[RAPI_BUFLEN];
@@ -216,15 +243,72 @@ private:
   int _tokenize();
   void _sendNextCmd();
   void _sendCmd(const char *cmdstr);
-  void _sendTail(uint8_t chk);
+  void _sendTail(uint8_t chk, bool addSeq = true);
   int _waitForResult(unsigned long timeout);
   void _commandComplete(int result);
+  bool _sendHeld();
+  bool _retryInFlight(int result);
   uint8_t _sequenceIdEnabled() {
     return (_flags & RSF_SEQUENCE_ID_ENABLED) ? 1 : 0;
   }
 public:
 
   RapiSender(Stream *stream);
+
+  // Strictly parse a RAPI/firmware version token: exactly three
+  // dot-separated groups of 1-3 decimal digits and nothing else, so "2junk",
+  // "", "2.0", "2.0.3x" or an overlong number are rejected instead of being
+  // read as a partial version. Inline so replacement senders (e.g. a
+  // simulator) get the same parser.
+  static bool parseVersion(const char *s, int &major, int &minor, int &patch)
+  {
+    int part[3];
+    if(nullptr == s) {
+      return false;
+    }
+    for(int i = 0; i < 3; i++) {
+      int digits = 0, val = 0;
+      while(*s >= '0' && *s <= '9') {
+        if(++digits > 3) {
+          return false;
+        }
+        val = val * 10 + (*s++ - '0');
+      }
+      if(0 == digits) {
+        return false;
+      }
+      part[i] = val;
+      if(i < 2 && '.' != *s++) {
+        return false;
+      }
+    }
+    if('\0' != *s) {
+      return false;
+    }
+    major = part[0];
+    minor = part[1];
+    patch = part[2];
+    return true;
+  }
+
+  // Usable queue slots (the ring buffer keeps one slot empty).
+  static constexpr size_t queueCapacity() { return RAPI_MAX_COMMANDS - 1; }
+
+  // Send nothing to the controller for the next ms milliseconds (e.g. right
+  // after it reports a restart). Commands are queued, not dropped, and are
+  // sent in order once the hold expires. Calling again restarts the hold.
+  // While held, ordinary commands beyond maxQueued (clamped to
+  // queueCapacity()) are refused with
+  // RAPI_RESPONSE_QUEUE_FULL. Re-arming the hold cancels (RAPI_RESPONSE_CANCELLED)
+  // priority commands still queued from before, and stops the one in flight
+  // from being retried: they belong to the previous controller session.
+  void holdSend(unsigned long ms, size_t maxQueued = RAPI_HOLD_MAX_QUEUED);
+
+  // Commands queued while priority is on may use the whole queue, even during
+  // a hold, and are retried up to RAPI_PRIORITY_RETRIES times. Applies to
+  // sendCmd() calls made directly between setPriority(true) and
+  // setPriority(false), not to ones made later from their callbacks.
+  void setPriority(bool on) { _priority = on; }
   void setStream(Stream *stream) { _stream = stream; }
   //  void sendString(const char *str) { dbgprint(str); }
 

@@ -37,3 +37,5 @@ Visual\ Micro
 .vscode/settings.json
 .vscode/.browse.c_cpp.db*
 .vscode/ipch
+# Backup files from patch/merge tools
+*.orig

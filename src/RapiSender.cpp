@@ -5,6 +5,8 @@
 #include <Arduino.h>
 #include "RapiSender.h"
 #include "MicroDebug.h"
+#include <ctype.h>
+#include <string.h>
 
 #define dbgprint(s) DBUG(s)
 #define dbgprintln(s) DBUGLN(s)
@@ -54,18 +56,105 @@ RapiSender::RapiSender(Stream * stream) :
   _completeHandler(nullptr),
   _timeout(0),
   _waitingForReply(false),
+  _holdUntil(0),
+  _holding(false),
+  _holdMaxQueued(RAPI_HOLD_MAX_QUEUED),
+  _priority(false),
+  _inFlight(),
   _respBuf{},
   _respBufOrig{}
 {
 }
 
+void RapiSender::holdSend(unsigned long ms, size_t maxQueued)
+{
+  _holdUntil = millis() + ms;
+  _holding = true;
+  _holdMaxQueued = maxQueued > queueCapacity() ? queueCapacity() : maxQueued;
+
+  // Drop priority commands left over from before this hold (e.g. boot reads
+  // for a controller that has just restarted again); the caller re-issues
+  // them. Ordinary commands keep their place. Handlers run after the queue is
+  // rebuilt, so one that queues a new command cannot disturb the scan.
+  _inFlight.retries = 0;
+  RapiCommandCompleteHandler cancelled[RAPI_MAX_COMMANDS];
+  size_t nCancelled = 0;
+  size_t n = _commandQueue.used();
+  for(size_t i = 0; i < n; i++) {
+    CommandItem cmd;
+    if(!_commandQueue.pop(cmd)) {
+      break;
+    }
+    if(cmd.priority) {
+      cancelled[nCancelled++] = cmd.handler;
+    } else {
+      _commandQueue.push(cmd);
+    }
+  }
+  for(size_t i = 0; i < nCancelled; i++) {
+    if(nullptr != cancelled[i]) {
+      cancelled[i](RAPI_RESPONSE_CANCELLED);
+    }
+  }
+}
+
+bool RapiSender::_retryInFlight(int result)
+{
+  if(!_inFlight.priority ||
+     !(RAPI_RESPONSE_TIMEOUT == result || RAPI_RESPONSE_BAD_CHECKSUM == result ||
+       RAPI_RESPONSE_INVALID_RESPONSE == result)) {
+    return false;
+  }
+  if(0 == _inFlight.retries) {
+    DBUGF("RAPI: giving up on %s (%d)", _inFlight.command, result);
+    return false;
+  }
+  _inFlight.retries--;
+  DBUGF("RAPI: retrying %s (%d)", _inFlight.command, result);
+  if(_sendHeld()) {
+    // Requeue (behind what is already waiting) rather than send into a hold.
+    CommandItem retry = _inFlight;
+    retry.handler = _completeHandler;
+    if(!_commandQueue.push(retry)) {
+      return false;
+    }
+    _inFlight = CommandItem();
+    _completeHandler = nullptr;
+    _waitingForReply = false;
+    return true;
+  }
+  // Re-send now, keeping its place ahead of the queue. It gets a fresh
+  // sequence id and a fresh timeout, so a late reply to the earlier attempt
+  // is dropped as stale.
+  _sendCmd(_inFlight.command);
+  _timeout = millis() + _inFlight.timeout;
+  return true;
+}
+
+bool RapiSender::_sendHeld()
+{
+  // Signed difference so the hold survives the millis() rollover.
+  if(_holding && (long)(millis() - _holdUntil) < 0) {
+    return true;
+  }
+  _holding = false;
+  return false;
+}
+
 void RapiSender::_sendNextCmd()
 {
+  if(_sendHeld()) {
+    // Commands stay queued; loop() sends them once the hold expires. Their
+    // timeouts start when they are actually sent.
+    return;
+  }
   CommandItem cmd;
   if(_commandQueue.pop(cmd))
   {
     _sendCmd(cmd.command);
     _completeHandler = cmd.handler;
+    _inFlight = cmd;
+    _inFlight.handler = nullptr; // _completeHandler owns it
     _timeout = millis() + cmd.timeout;
     _waitingForReply = true;
   }
@@ -75,22 +164,43 @@ void RapiSender::_sendNextCmd()
 //        = 1 = command will cause buffer overflow
 void
 RapiSender::_sendCmd(const char *cmdstr) {
-  _stream->print(cmdstr);
+  // a caller's own "^HH" checksum (e.g. a /r client) is dropped;
+  // our checksum below covers the whole line, including any sequence id.
+  const char *caret = strchr(cmdstr, '^');
+  size_t len = caret ? (size_t)(caret - cmdstr) : strlen(cmdstr);
+  _stream->write((const uint8_t *)cmdstr, len);
   dbgprint(cmdstr);
 
-  const char *s = cmdstr;
   uint8_t chk = 0;
-  while (*s) {
-    chk ^= *(s++);
+  for (size_t i = 0; i < len; i++) {
+    chk ^= cmdstr[i];
   }
 
-  _sendTail(chk);
+  // remember whether this is the version query (see _tokenize)
+  if (len >= 3 && !strncmp(cmdstr, "$GV", 3) && (len == 3 || cmdstr[3] == ' '))
+    _flags |= RSF_CMD_IS_VERSION;
+  else
+    _flags &= ~RSF_CMD_IS_VERSION;
+
+  // if the caller already put its own sequence id on the end
+  // (" :HH", e.g. a /r pass-through client), use it as-is instead of adding a
+  // second one, and expect that id in the reply.
+  bool addSeq = true;
+  if (_sequenceIdEnabled() && len >= 4 &&
+      cmdstr[len-4] == ' ' && cmdstr[len-3] == ESRAPI_SOS &&
+      isxdigit((unsigned char)cmdstr[len-2]) && isxdigit((unsigned char)cmdstr[len-1])) {
+    char hex[3] = { (char)toupper((unsigned char)cmdstr[len-2]), (char)toupper((unsigned char)cmdstr[len-1]), 0 };
+    _sequenceId = htou8(hex);
+    addSeq = false;
+  }
+
+  _sendTail(chk, addSeq);
 
   _sent++;
 }
 
-void RapiSender::_sendTail(uint8_t chk) {
-  if (_sequenceIdEnabled()) {
+void RapiSender::_sendTail(uint8_t chk, bool addSeq) {
+  if (_sequenceIdEnabled() && addSeq) {
     if (++_sequenceId == RAPI_INVALID_SEQUENCE_ID)
       ++_sequenceId;
     sprintf(_respBuf, " %c%02X", ESRAPI_SOS, (unsigned) _sequenceId);
@@ -143,23 +253,58 @@ RapiSender::_tokenize() {
     if (_tokenCnt == RAPI_MAX_TOKENS)
       break;
 
-    while (*s && (*s != ' ') && (*s != ESRAPI_SOS)) {
+    while (*s && (*s != ' ')) {
       s++;
     }
     if (*s == ' ') {
       *(s++) = '\0';
-    } else if (*s == ESRAPI_SOS) {
-      *(s++) = '\0';
-      uint8_t seqid = htou8(s + 1);
-      if (seqid != _sequenceId) {
+    }
+  }
+
+  // the controller sends the sequence id as its own last token
+  // (" :HH", open_evse rapi_proc.cpp appendSequenceId). Strip it, and for
+  // command replies ($OK/$NK) reject it if it isn't the id we just sent.
+  // Async events ($ST/$AT/...) and controller-initiated commands ($WF...) are
+  // not replies to us, so their id (if any) is just dropped.
+  bool isReply = _tokenCnt > 0 &&
+    (!strcmp(_tokens[0], "$OK") || !strcmp(_tokens[0], "$NK"));
+  bool hasSeq = _tokenCnt > 1 && _tokens[_tokenCnt-1][0] == ESRAPI_SOS;
+  if (_sequenceIdEnabled() && isReply && !hasSeq) {
+    int major, minor, patch;
+    // "$OK <fw version> <RAPI version>" with no id, before the controller
+    // has ever echoed one: the controller does not support ids (older
+    // firmware, or an implementation that leaves them out whatever RAPI
+    // version it reports). Only a well-formed version reply counts.
+    if (!(_flags & RSF_SEQUENCE_ID_SEEN) && (_flags & RSF_CMD_IS_VERSION) &&
+        !strcmp(_tokens[0], "$OK") && _tokenCnt >= 3 &&
+        parseVersion(_tokens[2], major, minor, patch)) {
+      // Turn id checking off for this session and accept the reply.
+      enableSequenceId(0);
+    } else {
+      // Any other id-less reply (a non-version reply, a malformed version
+      // reply, or any reply once the controller has echoed an id) cannot be
+      // matched to the command we sent.
+      // Drop it and keep ids on; the caller's timeout/retry re-asks.
 #ifdef DBG
-        sprintf(_respBuf, "bad seqid %x %x %s", seqid, _sequenceId, s);
-        dbgprintln(_respBuf);
+      dbgprintln("missing seqid");
 #endif
-        _tokenCnt = 0;
-        return RAPI_RESPONSE_BAD_SEQUENCE_ID;
-      }
-      break;                    // sequence id is last - break out
+      _tokenCnt = 0;
+      return RAPI_RESPONSE_BAD_SEQUENCE_ID;
+    }
+  }
+  if (hasSeq) {
+    uint8_t seqid = htou8(_tokens[_tokenCnt-1] + 1);
+    _tokenCnt--;
+    if (_sequenceIdEnabled() && isReply && seqid != _sequenceId) {
+#ifdef DBG
+      dbgprint("bad seqid ");
+      dbgprintln(seqid);
+#endif
+      _tokenCnt = 0;
+      return RAPI_RESPONSE_BAD_SEQUENCE_ID;
+    }
+    if (isReply) {
+      _flags |= RSF_SEQUENCE_ID_SEEN;
     }
   }
 
@@ -175,7 +320,14 @@ void RapiSender::_commandComplete(int result)
   // its operator() is still on the stack. No caller does this today; fixing it
   // properly means deciding whether a nested synchronous send should be
   // allowed at all, which is a bigger change than this branch should make.
+  if(_waitingForReply && _retryInFlight(result)) {
+    if(!_waitingForReply) {
+      _sendNextCmd(); // requeued: nothing in flight now
+    }
+    return;
+  }
   if(_waitingForReply) {
+    _inFlight = CommandItem();
     if(nullptr != _completeHandler) {
       _completeHandler(result);
     }
@@ -198,11 +350,29 @@ RapiSender::sendCmd(const char *cmdstr, RapiCommandCompleteHandler callback, uns
     return;
   }
 
+  // Id 00 is reserved as "no id": the controller would run the command but
+  // reply without an id. Refuse a caller-supplied " :00" before sending it.
+  if(_sequenceIdEnabled()) {
+    const char *caret = strchr(cmdstr, '^');
+    size_t len = caret ? (size_t)(caret - cmdstr) : strlen(cmdstr);
+    if(len >= 4 && !strncmp(cmdstr + len - 4, " :00", 4)) {
+      if(nullptr != callback) {
+        callback(RAPI_RESPONSE_BAD_SEQUENCE_ID);
+      }
+      return;
+    }
+  }
+
   strcpy(cmd.command, cmdstr);
   cmd.handler = callback;
   cmd.timeout = timeout;
+  cmd.priority = _priority;
+  cmd.retries = _priority ? RAPI_PRIORITY_RETRIES : 0;
 
-  if(_commandQueue.push(cmd)) {
+  // During a hold keep most of the queue free for priority commands.
+  bool capped = !_priority && _sendHeld() &&
+                _commandQueue.used() >= _holdMaxQueued;
+  if(!capped && _commandQueue.push(cmd)) {
     if(!_waitingForReply) {
       _sendNextCmd();
     }
@@ -340,11 +510,26 @@ RapiSender::_waitForResult(unsigned long timeout) {
 void
 RapiSender::enableSequenceId(uint8_t tf) {
   if (tf) {
-    _sequenceId = (uint8_t) millis();   // seed with random number
+    // Random start, so a reply left over from before a restart is unlikely
+    // to carry the id of our first commands.
+#if defined(EPOXY_DUINO) || defined(UNIX_HOST_DUINO)
+    // host builds (simulator/tests) may define ESP32/ESP8266 without the SDK
+    _sequenceId = (uint8_t) (micros() ^ (millis() >> 3));
+#elif defined(ESP32)
+    _sequenceId = (uint8_t) esp_random();
+#elif defined(ESP8266)
+    _sequenceId = (uint8_t) RANDOM_REG32;
+#else
+    _sequenceId = (uint8_t) (micros() ^ (millis() >> 3));
+#endif
+    if (_sequenceId == RAPI_INVALID_SEQUENCE_ID) _sequenceId = 1;
+    // Start a new session: whether this controller echoes ids is not known
+    // until it does again (e.g. it was replaced or reflashed since).
+    _flags &= ~RSF_SEQUENCE_ID_SEEN;
     _flags |= RSF_SEQUENCE_ID_ENABLED;
   } else {
     _sequenceId = RAPI_INVALID_SEQUENCE_ID;
-    _flags &= ~RSF_SEQUENCE_ID_ENABLED;
+    _flags &= ~(RSF_SEQUENCE_ID_ENABLED | RSF_SEQUENCE_ID_SEEN);
   }
 }
 
@@ -354,7 +539,11 @@ RapiSender::loop()
   if(_stream->available())
   {
     int ret = _waitForResult(RAPI_READ_TIMEOUT_MS);
-    if(RAPI_RESPONSE_ASYNC_EVENT == ret) {
+    if(RAPI_RESPONSE_BAD_SEQUENCE_ID == ret) {
+      // a stale reply to an earlier (timed-out) command. Drop it
+      // and keep waiting for the reply to the current one (or its timeout).
+      DBUGLN("RAPI: dropped reply with wrong sequence id");
+    } else if(RAPI_RESPONSE_ASYNC_EVENT == ret) {
       // async EVSE state transition or WiFi event
       if(nullptr != _onRapiEvent) {
         _onRapiEvent();
@@ -366,6 +555,10 @@ RapiSender::loop()
   else if (_waitingForReply && millis() >= _timeout)
   {
     _commandComplete(RAPI_RESPONSE_TIMEOUT);
+  }
+  // Release commands queued while sending was held (see holdSend()).
+  if(!_waitingForReply && hasPendingCommands()) {
+    _sendNextCmd();
   }
 }
 
