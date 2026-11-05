@@ -50,6 +50,8 @@ RapiSender::RapiSender(Stream * stream) :
   _tokenCnt(0),
   _tokens{},
   _onRapiEvent(nullptr),
+  _onSend(nullptr),
+  _onReceive(nullptr),
   _commandQueue(commandQueueItems, RAPI_MAX_COMMANDS),
   _completeHandler(nullptr),
   _timeout(0),
@@ -75,6 +77,9 @@ void RapiSender::_sendNextCmd()
 //        = 1 = command will cause buffer overflow
 void
 RapiSender::_sendCmd(const char *cmdstr) {
+  if(nullptr != _onSend) {
+    _onSend();
+  }
   _stream->print(cmdstr);
   dbgprint(cmdstr);
 
@@ -291,6 +296,9 @@ RapiSender::_waitForResult(unsigned long timeout) {
           continue;
         } else if (bufpos && (c == ESRAPI_EOC)) {
           _respBuf[bufpos] = '\0';
+          if(nullptr != _onReceive) {
+            _onReceive();
+          }
           // Save the original response
           strncpy(_respBufOrig, _respBuf, RAPI_BUFLEN);
           int ret = _tokenize();
